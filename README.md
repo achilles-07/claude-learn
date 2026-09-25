@@ -50,6 +50,8 @@ Inside Claude Code:
 
 Restart Claude Code. That's it. Use `/plugin` to update, disable or remove it later.
 
+> This repo is **private**. `/plugin marketplace add` clones it with your normal git credentials, so the machine needs GitHub access to `achilles-07/claude-learn`: an SSH key added to your GitHub account, or `gh auth login`. If the add fails with an authentication error, use Option B with a clone you've already made.
+
 ### Option B: from a copied or cloned folder
 
 Plugins can't simply be dropped into `~/.claude/plugins/`, because Claude Code doesn't auto-discover them there. Put the folder anywhere you like, then register it as a local marketplace. A tidy place:
