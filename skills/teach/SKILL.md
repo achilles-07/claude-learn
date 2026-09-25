@@ -1,6 +1,6 @@
 ---
 name: teach
-description: Teach the user a topic so it is understood, not memorized — probe their level, plan a dependency map, then teach node by node with quizzes. Use only when the user explicitly asks to learn, study, or be taught a topic ("teach me X", "I want to understand X", "help me learn X", "quiz me on X"). Not for routine explanations during coding or other work — including development work inside the learning vault itself.
+description: Teach the user a topic so it is understood, not memorized — probe their level, plan a dependency map, then teach node by node with quizzes. Use only when the user explicitly asks to learn, study, or be taught a topic ("teach me X", "I want to understand X", "help me learn X", "quiz me on X"). Not for routine explanations during coding or other work — including development work inside the learn folder itself.
 ---
 
 # Teaching
@@ -70,7 +70,7 @@ When unsure, lean Socratic for things the learner can clearly reason about; othe
 
 The two principles are *how* you teach. This is *when* — the shape of a teaching session. Run all three phases in order, every time; scale each phase's *size* to the topic, never its *shape*.
 
-**Session setup.** At the start of a teaching session, if the lesson isn't being logged yet, suggest once: "Run `/learn:md-log <topic>` (e.g. `/learn:md-log LLD/SOLID`) to read this lesson in Obsidian."
+**Session setup.** At the start of a teaching session, if the lesson isn't being logged yet, suggest once: "Run `/learn:md-log <topic>` (e.g. `/learn:md-log LLD/SOLID`) to follow the lesson as a Markdown note."
 
 **The log is the lesson — keep plumbing out of it.** Everything you write lands in the learner's notes. Never narrate tooling: no "using the teach skill", no remarks on logging, subagents, background research finishing, or "still waiting for you". When a background researcher finishes and nothing in the lesson changes, reply with nothing at all. If it *does* change something, state the correction as lesson content ("Correction: …").
 
@@ -98,9 +98,9 @@ A **quiz** is a graded question. Claude Code has no grading popup, so run it lik
    - **Placement:** models don't randomize well, so place the correct option deliberately: rotate it through positions 1→3→2→4→… across successive quizzes (with fewer options, wrap), never the same slot twice in a row.
    - **"I don't know":** end the question text with "(Pick *Other* and type *idk* if you don't know.)" — don't spend one of the 4 option slots on it.
 3. **Grade in your reply**, as the first thing after the answer:
-   - correct → `> [!success] ✓ Correct` / wrong → `> [!failure] ✗ Incorrect — answer: <correct option>`
+   - correct → `> **✓ Correct**` / wrong → `> **✗ Incorrect** — answer: <correct option>`
    - then `> ` + the explanation (why the right one is right; for a miss, what belief the chosen option reflects).
-   - "idk" (or any "I don't know") → `> [!question] Not known yet — answer: <correct option>` — not ✗. It's a distinct, honest signal: in Phase 1a it marks a ceiling just like a miss, but without implying a misconception.
+   - "idk" (or any "I don't know") → `> **Not known yet** — answer: <correct option>` — not ✗. It's a distinct, honest signal: in Phase 1a it marks a ceiling just like a miss, but without implying a misconception.
    - Any other "Other" free-text answer is graded on its merits.
 4. **Speed — batch independent probe questions.** In Phase 1a, one `AskUserQuestion` call may carry up to 4 questions when none depends on another's answer (e.g. one per prerequisite strand). Grade all of them in one reply, then choose the next batch from the results (binary-search each strand's edge). Phase 3 quiz-checks stay one question at a time — each builds on the last.
 
@@ -144,7 +144,7 @@ A good plan is what makes the teaching feel inevitable instead of arbitrary.
 **Then present the plan in chat — always, before any teaching.** Two parts:
 
 1. **The approach, in prose.** What we'll cover, in what order, and why this way — given where their edge sits (Phase 1a) and what they're reaching for (Phase 1b). A few freeform sentences.
-2. **The dependency map.** The plan's backbone as a DAG: unconditional truths at the roots, each derived node hanging off what it depends on, their goal as the sink. Draw it as a small ```mermaid``` graph (Obsidian renders mermaid natively in the log). This map *is* the teaching order — Phase 3 builds it node by node. Keep it small: few nodes, short labels — a map, not the territory. Suffix each node that gets a visual with 🖼 in its label, and list the planned visuals under the map in one line each ("🖼 Strategy — class diagram: Context → «interface» Strategy ← ConcreteA / ConcreteB"). The learner can ask for more or fewer when approving.
+2. **The dependency map.** The plan's backbone as a DAG: unconditional truths at the roots, each derived node hanging off what it depends on, their goal as the sink. Draw it as a small ```mermaid``` graph (Markdown readers with Mermaid support render it in the lesson note). This map *is* the teaching order — Phase 3 builds it node by node. Keep it small: few nodes, short labels — a map, not the territory. Suffix each node that gets a visual with 🖼 in its label, and list the planned visuals under the map in one line each ("🖼 Strategy — class diagram: Context → «interface» Strategy ← ConcreteA / ConcreteB"). The learner can ask for more or fewer when approving.
 
 **Stress-test the roots before presenting.** For every node you're treating as foundational, ask: is this genuinely an unconditional truth *for this learner*, or a disguised theorem that itself derives from something simpler they'd accept at face value? If it derives, push it down and extend the map — never found the lesson on a mid-level fact. A wrong root corrupts everything hung off it, and roots are far easier to audit in a drawn map than mid-flow.
 
@@ -162,7 +162,7 @@ For **every node** (each unconditional truth *and* each non-trivial reasoning st
 2. **Establish.**
    - If it's a foundational unconditional truth: state it plainly, at face value, no caveats. Surface an atomic unit if one fits.
    - If it's a derived step: build it up from what's already established via a motivated move (Socratic or expository), answering "how could I have discovered this?" When a Socratic step has a gradable right/wrong answer, pose it as a quiz even though the learner is "attempting the discovery" — gradable-and-Socratic is normal, not a contradiction; only fall back to ungraded `AskUserQuestion` if there's genuinely no right answer.
-   - **Visual checkpoint.** If this node has a planned visual, embed it (`![[viz-….png|500]]`) at the moment its structure is introduced — after the motivating problem, before the quiz, so the learner can use the picture to answer. Not back yet? Keep teaching the node in prose and embed it in your next message when it arrives — never stall for it. If the learner stumbles on a structural idea you didn't plan a picture for, commission one now (`visualize` skill) and carry on while it renders.
+   - **Visual checkpoint.** If this node has a planned visual, embed it (`![short description](viz/viz-….png)`) at the moment its structure is introduced — after the motivating problem, before the quiz, so the learner can use the picture to answer. Not back yet? Keep teaching the node in prose and embed it in your next message when it arrives — never stall for it. If the learner stumbles on a structural idea you didn't plan a picture for, commission one now (`visualize` skill) and carry on while it renders.
 3. **Connect.** Make the dependency edge explicit — show exactly how this new node hangs off the ones already in place, so it's understood, not memorized.
 4. **Quiz-check.** Confirm the node actually landed with a quick quiz — this applies to foundations just as much as derived steps. An unconfirmed unconditional truth is exactly as dangerous as an unconfirmed derived fact: if the learner misses it, that node isn't solid, so stop and fix it before building anything on top of it.
 
@@ -186,7 +186,7 @@ The same voice applies everywhere: explanations, the plan's prose, quiz explanat
 
 ## Formatting — math renders as LaTeX
 
-Everything written in a session is rendered to the learner through Obsidian (via `/learn:md-log`), which renders LaTeX natively. So whenever math notation is involved — explanations, questions, quiz options and explanations, anything — write it in LaTeX instead of plain-text approximations:
+Everything written in a session lands in the learner's Markdown lesson note (via `/learn:md-log`), read in a Markdown reader that renders LaTeX math. Use standard Markdown only — no app-specific syntax like `[!callouts]` or `![[wiki embeds]]`. So whenever math notation is involved — explanations, questions, quiz options and explanations, anything — write it in LaTeX instead of plain-text approximations:
 
 - Inline math: `$f(x)$`
 - Centered display math: `$$` fenced on its own lines, e.g. `$$\n f(x) \n$$`

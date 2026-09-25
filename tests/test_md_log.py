@@ -78,7 +78,7 @@ class MdLogTest(unittest.TestCase):
         r = self.run_cli("link", "lesson.md")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("linked", r.stdout)
-        self.assertEqual(self.log(), "> [!quote] YOU\n\nteach me TCP\n\n> [!abstract] CLAUDE\n\nFirst, packets.\n")
+        self.assertEqual(self.log(), "> **You:** teach me TCP\n\nFirst, packets.\n")
 
     def test_hook_appends_only_new_entries(self):
         self.write(user("one"))
@@ -92,20 +92,20 @@ class MdLogTest(unittest.TestCase):
     def test_consecutive_assistant_text_merged(self):
         self.write(assistant(text("a")), assistant(text("b")))
         self.run_cli("link", "lesson.md")
-        self.assertEqual(self.log().count("[!abstract]"), 1)
+        self.assertEqual(self.log(), "a\n\nb\n")
         self.assertIn("a\n\nb", self.log())
 
     def test_question_and_answer(self):
         self.write(assistant(text("Quick check."), ask_use("t1", [Q])),
                    tool_result("t1", 'The user answered: "What is $2+2$?"="4"',
                                {"questions": [Q], "answers": {"What is $2+2$?": "4"}}),
-                   assistant(text("> [!success] ✓ Correct")))
+                   assistant(text("> **✓ Correct**")))
         self.run_cli("link", "lesson.md")
         log = self.log()
-        self.assertIn("> [!question] Arithmetic\n> What is $2+2$?\n>\n> 1. 3\n> 2. 4", log)
-        self.assertIn("> [!check] YOUR ANSWER\n> **Arithmetic:** 4", log)
-        self.assertLess(log.index("[!question]"), log.index("YOUR ANSWER"))
-        self.assertLess(log.index("YOUR ANSWER"), log.index("✓ Correct"))
+        self.assertIn("> **Question — Arithmetic**\n> What is $2+2$?\n>\n> 1. 3\n> 2. 4", log)
+        self.assertIn("> **Your answer — Arithmetic:** 4", log)
+        self.assertLess(log.index("**Question —"), log.index("**Your answer"))
+        self.assertLess(log.index("**Your answer"), log.index("✓ Correct"))
 
     def test_question_live_then_answer_in_later_batch(self):
         # PreToolUse run: question is in the transcript, answer isn't yet
@@ -114,15 +114,15 @@ class MdLogTest(unittest.TestCase):
         self.hook(event="PreToolUse", tool_use_id="t1")
         log = self.log()
         self.assertIn("Node 1 explained.", log)
-        self.assertIn("[!question] Arithmetic", log)
-        self.assertNotIn("YOUR ANSWER", log)
+        self.assertIn("**Question — Arithmetic**", log)
+        self.assertNotIn("Your answer", log)
         # Stop run: answer arrives in a later batch
         self.write(tool_result("t1", "...", {"questions": [Q], "answers": {"What is $2+2$?": "4"}}),
                    assistant(text("graded")))
         self.hook()
         log = self.log()
-        self.assertEqual(log.count("[!question]"), 1)
-        self.assertIn("> **Arithmetic:** 4", log)
+        self.assertEqual(log.count("**Question —"), 1)
+        self.assertIn("> **Your answer — Arithmetic:** 4", log)
 
     def test_pretooluse_waits_for_transcript_flush(self):
         self.run_cli("link", "lesson.md")
@@ -135,13 +135,24 @@ class MdLogTest(unittest.TestCase):
         self.write(user("go"), assistant(text("late flush"), ask_use("t9", [Q])))
         p.wait(timeout=5)
         self.assertIn("late flush", self.log())
-        self.assertIn("[!question]", self.log())
+        self.assertIn("**Question —", self.log())
 
     def test_unanswered_question(self):
         self.write(assistant(ask_use("t1", [Q])),
                    tool_result("t1", "The user doesn't want to proceed with this tool use."))
         self.run_cli("link", "lesson.md")
-        self.assertIn("> [!check] YOUR ANSWER\n> **Arithmetic:** *(no answer)*", self.log())
+        self.assertIn("> **Your answer — Arithmetic:** *(no answer)*", self.log())
+
+    def test_multiline_prompt_stays_in_quote(self):
+        self.write(user("line one\nline two\n\nline four"))
+        self.run_cli("link", "lesson.md")
+        self.assertEqual(self.log(), "> **You:** line one\n> line two\n>\n> line four\n")
+
+    def test_no_obsidian_only_syntax(self):
+        self.write(user("q"), assistant(text("t"), ask_use("t1", [Q])),
+                   tool_result("t1", "", {"answers": {"What is $2+2$?": "4"}}))
+        self.run_cli("link", "lesson.md")
+        self.assertNotIn("[!", self.log())
 
     def test_noise_filtered(self):
         self.write(
@@ -162,7 +173,7 @@ class MdLogTest(unittest.TestCase):
         self.assertNotIn("/model", log)
         self.assertNotIn("/md-log", log)
         self.assertNotIn("SKILL loaded", log)
-        self.assertIn("\n\nhi\n", log)
+        self.assertIn("> **You:** hi\n", log)
         for bad in ("secret", "Caveat", "hmm", "file.txt", "subagent prompt", "# Teaching"):
             self.assertNotIn(bad, log)
         self.assertIn("mid-turn msg", log)
@@ -201,7 +212,7 @@ class MdLogTest(unittest.TestCase):
                 break
             time.sleep(0.1)
         self.assertIn("Slow lesson text.", self.log())
-        self.assertIn("[!question] Arithmetic", self.log())
+        self.assertIn("**Question — Arithmetic**", self.log())
 
     def test_peer_message_not_logged_as_user(self):
         self.write(
@@ -233,7 +244,7 @@ class MdLogTest(unittest.TestCase):
         log = self.log()
         for bad in ("Now logging", "/teach", "SKILL loaded", "expansion"):
             self.assertNotIn(bad, log)
-        self.assertIn("> [!quote] YOU\n\nTeach me design patterns", log)
+        self.assertIn("> **You:** Teach me design patterns", log)
         self.assertIn("Lesson starts.", log)
 
     def test_namespaced_plugin_command_is_plumbing(self):
@@ -268,18 +279,18 @@ class MdLogTest(unittest.TestCase):
         log = self.log()
         self.assertNotIn("No response requested", log)
         self.assertNotIn("still waiting", log)
-        self.assertIn("[!question] Arithmetic", log)  # questions always reach the learner
+        self.assertIn("**Question — Arithmetic**", log)  # questions always reach the learner
         self.assertIn("Plan above.", log)
         self.assertIn("Node 1.", log)
 
     def test_embed_in_notification_turn_is_kept(self):
         self.write(user("go"), assistant(text("Node 1.")),
                    user("<task-notification>\n<task-id>m</task-id>\n</task-notification>"),
-                   assistant(text("Here is the structure:\n\n![[viz-observer-1.png|500]]")),
+                   assistant(text("Here is the structure:\n\n![Observer structure](viz/viz-observer-1.png)")),
                    user("<task-notification>\n<task-id>n</task-id>\n</task-notification>"),
                    assistant(text("Noted.")))
         self.run_cli("link", "lesson.md")
-        self.assertIn("![[viz-observer-1.png|500]]", self.log())
+        self.assertIn("![Observer structure](viz/viz-observer-1.png)", self.log())
         self.assertNotIn("Noted.", self.log())
 
     def test_synthetic_assistant_messages_not_logged(self):
@@ -318,7 +329,7 @@ class MdLogTest(unittest.TestCase):
         log = self.log()
         for bad in ("SUMMARY", "task-notification", "bash-input", "bash-stdout"):
             self.assertNotIn(bad, log)
-        self.assertEqual(log.count("[!quote] YOU"), 1)
+        self.assertEqual(log.count("**You:**"), 1)
 
     def test_bad_entry_does_not_block_logging(self):
         self.write(user("one"))
@@ -428,7 +439,7 @@ class MdLogTest(unittest.TestCase):
         (self.cwd / "lesson.md").write_text("# My notes\n")
         self.write(user("one"))
         self.run_cli("link", "lesson.md")
-        self.assertTrue(self.log().startswith("# My notes\n\n> [!quote] YOU"))
+        self.assertTrue(self.log().startswith("# My notes\n\n> **You:**"))
 
 
 if __name__ == "__main__":

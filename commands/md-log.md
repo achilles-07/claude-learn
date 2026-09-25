@@ -1,5 +1,5 @@
 ---
-description: Start logging this session to a topic note in the learning vault (opens it in Obsidian)
+description: Start logging this session to a topic note in your learn folder (opens it in your default Markdown app)
 argument-hint: "<topic>[/<subtopic>]"
 allowed-tools: Bash(python3:*)
 ---

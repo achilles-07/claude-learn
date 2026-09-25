@@ -5,7 +5,7 @@ Turn Claude Code into a tutor that teaches for *understanding*, not memorization
 - **Probe → plan → teach.** Claude first maps what you already know with graded quiz popups, then plans a dependency map of the topic (unconditional truths at the roots), then teaches it node by node. Every step is motivated ("how could I have discovered this?") and quiz-checked.
 - **Diagrams that are checked.** Structural ideas get a class, sequence, state or flow diagram, or an SVG figure. They're planned up front and drawn in the background by subagents that render each picture and *look at it* before handing it over.
 - **Fact-checking.** A researcher subagent verifies claims on the web before they're taught.
-- **A live Obsidian lesson log.** `/learn:md-log <topic>` creates a note for the topic in your vault and mirrors the lesson into it as you go: explanations, quiz questions before you answer, your answers, and diagrams. Math renders as LaTeX.
+- **A live Markdown lesson note.** `/learn:md-log <topic>` creates a plain `.md` note for the topic, opens it in your default Markdown app, and mirrors the lesson into it as you go: explanations, quiz questions before you answer, your answers, and diagrams. It's standard Markdown (with Mermaid diagrams and `$…$` math), so any capable reader works.
 
 ## What's inside
 
@@ -25,7 +25,7 @@ Turn Claude Code into a tutor that teaches for *understanding*, not memorization
 - **Python 3**, runnable as `python3`
 - **Node.js**, for the Mermaid renderer: `npm install -g @mermaid-js/mermaid-cli`
 - **An SVG renderer**, any one of: `rsvg-convert` (librsvg), ImageMagick, or Google Chrome / Chromium / Edge
-- [**Obsidian**](https://obsidian.md) to read the lessons (optional; the log is plain Markdown)
+- **A Markdown reader that renders Mermaid and math**, set as the default app for `.md` files (see below)
 
 | | macOS | Linux (Debian/Ubuntu) | Windows |
 |---|---|---|---|
@@ -33,7 +33,6 @@ Turn Claude Code into a tutor that teaches for *understanding*, not memorization
 | Node.js | `brew install node` | `sudo apt install nodejs npm` | `winget install OpenJS.NodeJS` |
 | Mermaid CLI | `npm i -g @mermaid-js/mermaid-cli` | same | same |
 | SVG renderer | `brew install librsvg` | `sudo apt install librsvg2-bin` | Chrome or Edge (already installed) is enough |
-| Obsidian | `brew install --cask obsidian` | `flatpak install flathub md.obsidian.Obsidian` or AppImage | `winget install Obsidian.Obsidian` |
 
 ¹ The python.org installer on Windows provides `python`/`py` but not `python3`. Either use the Microsoft Store build, or copy `python.exe` to `python3.exe` in the Python install folder.
 
@@ -75,36 +74,53 @@ Then `/plugin install learn@claude-learn` and restart Claude Code. After a `git 
 
 **Just trying it out?** `claude --plugin-dir /path/to/claude-learn` loads it for one session without installing.
 
-## Set up your learning vault
+## Pick a Markdown reader
 
-Lessons go into a vault folder, `~/learn` by default (`%USERPROFILE%\learn` on Windows). To use a different folder, set `LEARN_VAULT` in `~/.claude/settings.json`:
+`/learn:md-log` opens the lesson note in your system's **default app for `.md` files**, so choose one that renders **Mermaid** diagrams (the lesson plan's dependency map) and **LaTeX math** (`$…$`), and ideally refreshes live while the file grows. Good options:
+
+| Reader | Mermaid | Math | Platforms |
+|---|---|---|---|
+| [Obsidian](https://obsidian.md) | built in | built in | macOS, Linux, Windows |
+| [Typora](https://typora.io) | built in | built in | macOS, Linux, Windows |
+| [MarkText](https://github.com/marktext/marktext) | built in | built in | macOS, Linux, Windows |
+| [VS Code](https://code.visualstudio.com) Markdown preview | with the *Markdown Preview Mermaid Support* extension | built in | macOS, Linux, Windows |
+
+Then make it the default for `.md` files:
+
+- **macOS:** Finder → select any `.md` file → *Get Info* (⌘I) → *Open with* → pick the app → *Change All…*
+- **Linux:** `xdg-mime default <app>.desktop text/markdown`, for example `xdg-mime default typora.desktop text/markdown`
+- **Windows:** right-click any `.md` file → *Open with* → *Choose another app* → pick it → tick *Always use this app*
+
+Diagram images are plain relative links (`viz/…png` next to the note), so they render in every reader.
+
+## Where notes go
+
+Lessons go into `~/learn` by default (`%USERPROFILE%\learn` on Windows). To use a different folder, set `LEARN_DIR` in `~/.claude/settings.json`:
 
 ```json
 {
-  "env": { "LEARN_VAULT": "/Users/you/Documents/learn" }
+  "env": { "LEARN_DIR": "/Users/you/Documents/learn" }
 }
 ```
 
 On Windows use a path like `"C:\\Users\\you\\Documents\\learn"`.
 
-Open that folder in Obsidian once with **Open folder as vault**, so `/learn:md-log` can open notes in it.
-
 ## Use it
 
 ```
-cd ~/learn            # or anywhere: notes always go to the vault
+cd ~/learn            # or anywhere: notes always go to the learn folder
 claude
 /learn:md-log LLD/Strategy
 /learn:teach Strategy pattern. I know basic OOP; focus on when to use it vs State
 ```
 
-- `/learn:md-log Design Patterns` → `<vault>/Design Patterns/Design Patterns.md`
-- `/learn:md-log LLD/SOLID` → `<vault>/LLD/SOLID.md` (subtopics share a folder)
+- `/learn:md-log Design Patterns` → `~/learn/Design Patterns/Design Patterns.md`
+- `/learn:md-log LLD/SOLID` → `~/learn/LLD/SOLID.md` (subtopics share a folder)
 - Coming back to a topic later appends to the same note, without duplicating anything.
 - Diagrams are saved to `viz/` next to the note and embedded inline.
 - `/learn:md-unlog` stops logging.
 
-Answer the quiz popups in the terminal and read the lesson in Obsidian. Pick **Other → idk** when you don't know an answer; that's a useful signal, not a wrong answer. You don't call `visualize`, the researcher or the diagram makers yourself: the teacher uses them.
+Answer the quiz popups in the terminal and read the lesson in your Markdown reader. Pick **Other → idk** when you don't know an answer; that's a useful signal, not a wrong answer. You don't call `visualize`, the researcher or the diagram makers yourself: the teacher uses them.
 
 When nothing else defines them, the short forms `/md-log` and `/teach` also work, and saying "teach me X" triggers the skill too.
 
@@ -112,14 +128,15 @@ When nothing else defines them, the short forms `/md-log` and `/teach` also work
 
 - **Nothing appears in the note**: check `~/.claude/md-log/errors.log`, and that `python3 --version` works in the shell Claude Code uses.
 - **Diagrams fail to render**: run `python3 scripts/render.py mermaid in.mmd out.png` yourself to see the error. Usually `mmdc` isn't installed, or it can't find a browser. Set `PUPPETEER_EXECUTABLE_PATH` to your Chrome/Edge binary.
-- **The note doesn't open in Obsidian**: open the vault folder in Obsidian once. On Linux, `xdg-open` must be able to handle `obsidian://` links.
+- **The note opens in the wrong app** (or doesn't open): set your reader as the default app for `.md` files (see *Pick a Markdown reader*). On Linux this needs `xdg-open`.
+- **Diagrams or math show as raw text**: your reader doesn't render Mermaid or LaTeX. Switch readers, or add the plugin/extension for it.
 
 ## Development
 
 ```bash
-python3 tests/test_md_log.py      # 34 tests for the lesson logger
+python3 tests/test_md_log.py      # 36 tests for the lesson logger
 ```
 
 ## Credits
 
-The teaching method, skills and agent designs are adapted from Amos Blomqvist's pi configuration, [amosblomqvist/learn](https://github.com/amosblomqvist/learn) (see his video [How I Use AI to Learn Things](https://www.youtube.com/watch?v=kzcI5F4tGiU)). This repo ports them to Claude Code and adds the quiz protocol, planned background visuals, topic vaults and a cross-platform lesson logger.
+The teaching method, skills and agent designs are adapted from Amos Blomqvist's pi configuration, [amosblomqvist/learn](https://github.com/amosblomqvist/learn) (see his video [How I Use AI to Learn Things](https://www.youtube.com/watch?v=kzcI5F4tGiU)). This repo ports them to Claude Code and adds the quiz protocol, planned background visuals, topic folders and a cross-platform lesson logger.

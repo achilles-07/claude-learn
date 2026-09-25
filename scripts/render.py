@@ -114,7 +114,7 @@ def publish(png, slug):
 
 def stage():
     # Under the cwd (hidden): file edits there need no extra permission, and
-    # Obsidian never indexes dot-folders.
+    # note apps generally hide dot-folders.
     root = Path.cwd() / ".viz-staging"
     root.mkdir(parents=True, exist_ok=True)
     print(tempfile.mkdtemp(dir=root))

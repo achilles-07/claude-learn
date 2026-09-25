@@ -1,11 +1,11 @@
 ---
 name: visualize
-description: "Only during a teaching session (the teach skill is active or the user is studying a topic) — not for coding or other work. Add a correct, minimal visual to a lesson — a diagram or geometric picture — that renders inline in the Obsidian log. Use when an idea is genuinely clearer as a picture: a dependency graph, system/flow, sequence, state machine, tree, comparison, or a spatial/geometric thing (coordinate geometry, number line, vectors, a plot, a physical layout). Outsources authoring+rendering to a maker subagent that verifies the image by looking at it, then you embed the returned file."
+description: "Only during a teaching session (the teach skill is active or the user is studying a topic) — not for coding or other work. Add a correct, minimal visual to a lesson — a diagram or geometric picture — that renders inline in the Markdown lesson note. Use when an idea is genuinely clearer as a picture: a dependency graph, system/flow, sequence, state machine, tree, comparison, or a spatial/geometric thing (coordinate geometry, number line, vectors, a plot, a physical layout). Outsources authoring+rendering to a maker subagent that verifies the image by looking at it, then you embed the returned file."
 ---
 
 # Visualize
 
-A picture earns its place only when it shows something words can't — shape, structure, direction, relationship, geometry. This skill produces ONE such picture, guarantees it is **correct** (the maker renders it and looks at it before returning), and drops it into the lesson so it renders inline in the Obsidian `md-log` file.
+A picture earns its place only when it shows something words can't — shape, structure, direction, relationship, geometry. This skill produces ONE such picture, guarantees it is **correct** (the maker renders it and looks at it before returning), and drops it into the lesson so it renders inline in the lesson note that `md-log` writes.
 
 You are the **creative director**. You decide the exact idea and distill it to its fewest carrying elements. A **maker subagent** does the authoring, rendering, visual verification, and saving, then returns a filename. You embed that filename in your reply.
 
@@ -53,7 +53,7 @@ Agent(subagent_type: "learn:mermaid-maker", prompt: "<your minimal, concrete bri
 Agent(subagent_type: "learn:svg-maker", prompt: "<your minimal, concrete brief>")
 ```
 
-The maker owns its own render toolchain — it authors the source, renders it to a PNG, **looks at the PNG and iterates until it is correct and clean**, publishes it into the vault with a unique filename, and returns:
+The maker owns its own render toolchain — it authors the source, renders it to a PNG, **looks at the PNG and iterates until it is correct and clean**, publishes it into the lesson's viz/ folder with a unique filename, and returns:
 
 ```
 RESULT:
@@ -65,18 +65,18 @@ If it returns `RESULT: NONE`, it couldn't make a correct picture of the brief �
 
 ## Embed it in the lesson
 
-Put the embed directly in your teaching reply, using Obsidian's wikilink embed with the returned **filename** (not the full path) and a display width:
+Put the embed directly in your teaching reply as a standard Markdown image, with a short description as the alt text and the returned **filename** under `viz/`:
 
 ```
-![[viz-<slug>-<timestamp>.png|500]]
+![Observer: subject notifies observers through an interface](viz/viz-<slug>-<timestamp>.png)
 ```
 
-That's all. The `md-log` extension mirrors your reply text verbatim into the linked `.md`, and Obsidian resolves the embed by filename anywhere in the vault (the maker saves into a `viz` folder next to the linked note, inside the vault) — so it renders inline in the lesson automatically. Width `|500` is a good default; use larger for dense diagrams. Introduce the visual in a sentence, then let it carry the idea — don't narrate every element back in prose.
+That's all. `md-log` mirrors your reply text verbatim into the lesson note, and the maker saved the PNG into the `viz/` folder right next to that note — so the relative link renders inline in any Markdown reader. Use standard Markdown only (no wiki-style `![[…]]` embeds or size suffixes). Introduce the visual in a sentence, then let it carry the idea — don't narrate every element back in prose.
 
 ## Why this is reliable
 
 - The maker never returns a picture it hasn't **looked at**, so "renders fine but says something false" is caught before it reaches the learner.
 - PNG embed means **what the maker verified is pixel-identical to what the learner sees** — no re-render drift.
-- Unique filenames keep Obsidian's by-filename embed resolution unambiguous.
+- Unique filenames mean a later diagram never overwrites an earlier one.
 
 > The makers render through the plugin's `scripts/render.py` (Mermaid via `mmdc`; SVG via `rsvg-convert`, ImageMagick or headless Chrome). You don't render anything yourself — you only brief the maker and embed the filename it returns.

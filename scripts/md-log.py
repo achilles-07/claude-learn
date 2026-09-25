@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""md-log — mirror a Claude Code session into a markdown file (read it in Obsidian).
+"""md-log — mirror a Claude Code session into a plain Markdown lesson note.
 
 Port of the pi md-log extension. Captures only reading-relevant content:
 user prompts, assistant text, and AskUserQuestion Q&A. Other tools are omitted.
 
   md-log.py link <topic>[/<subtopic>]  link this session ($CLAUDE_CODE_SESSION_ID) to
-                           <vault>/<topic>/<topic>.md (or <vault>/<topic>/<subtopic>.md),
-                           backfill, and open it in Obsidian. A *.md, /… or ~… argument
+                           <learn dir>/<topic>/<topic>.md (or <learn dir>/<topic>/<subtopic>.md),
+                           backfill, and open it in your default Markdown app. A *.md, /… or ~… argument
                            is used as a plain file path instead.
   md-log.py unlink         stop logging this session
   md-log.py vizdir         where diagrams for this session go (viz/ next to the note)
@@ -17,7 +17,6 @@ import os
 import re
 import subprocess
 import sys
-import urllib.parse
 
 try:
     import fcntl  # macOS / Linux
@@ -30,8 +29,9 @@ from pathlib import Path
 
 STATE_DIR = Path(os.environ.get("MD_LOG_STATE_DIR") or Path.home() / ".claude" / "md-log")
 PROJECTS_DIR = Path(os.environ.get("MD_LOG_PROJECTS_DIR") or Path.home() / ".claude" / "projects")
-# The learning vault: set LEARN_VAULT (e.g. in ~/.claude/settings.json "env") to move it.
-VAULT = Path(os.environ.get("LEARN_VAULT") or os.environ.get("MD_LOG_VAULT") or Path.home() / "learn").expanduser()
+# Where lesson notes live: set LEARN_DIR (e.g. in ~/.claude/settings.json "env") to move it.
+VAULT = Path(os.environ.get("LEARN_DIR") or os.environ.get("LEARN_VAULT") or os.environ.get("MD_LOG_VAULT")
+             or Path.home() / "learn").expanduser()
 LINKS = STATE_DIR / "links.json"
 BACKFILLED = STATE_DIR / "backfilled.json"  # {file: [session ids already backfilled into it]}
 ERRORS = STATE_DIR / "errors.log"
@@ -174,13 +174,13 @@ def classify_user(text, meta=False):
 def question_block(q):
     lines = q.get("question", "").split("\n") + [""]
     lines += [f"{i}. {o.get('label', '')}" for i, o in enumerate(q.get("options") or [], 1)]
-    return f"> [!question] {q.get('header') or 'Question'}\n" + quote(lines)
+    return f"> **Question — {q.get('header') or 'Quiz'}**\n" + quote(lines)
 
 
 def answer_block(qs, answers):
-    lines = [f"**{q.get('header') or 'Answer'}:** {answers.get(q.get('question')) or '*(no answer)*'}"
+    lines = [f"**Your answer — {q.get('header') or 'Quiz'}:** {answers.get(q.get('question')) or '*(no answer)*'}"
              for q in qs]
-    return "> [!check] YOUR ANSWER\n" + quote(lines)
+    return quote(lines)
 
 
 def render(entries, pending=None, quiet=False):
@@ -204,7 +204,7 @@ def render(entries, pending=None, quiet=False):
         if mode and starts_turn:
             state["quiet"] = mode == "quiet"
         if shown:
-            add("user", f"> [!quote] YOU\n\n{shown}")
+            add("user", quote(f"**You:** {shown}".split("\n")))
 
     def one(d):
         if not isinstance(d, dict) or d.get("isSidechain") \
@@ -244,7 +244,7 @@ def render(entries, pending=None, quiet=False):
                     continue
                 # A quiet turn is plumbing, except a reply that embeds a finished diagram
                 if c.get("type") == "text" and c.get("text", "").strip() \
-                        and (not state["quiet"] or "![[" in c["text"]):
+                        and (not state["quiet"] or "![" in c["text"]):
                     add("assistant", c["text"].strip())
                 elif c.get("type") == "tool_use" and c.get("name") == "AskUserQuestion":
                     qs = (c.get("input") or {}).get("questions") or []
@@ -257,7 +257,7 @@ def render(entries, pending=None, quiet=False):
         except Exception:  # one malformed entry must not stall the log forever
             pass
 
-    out = [f"> [!abstract] CLAUDE\n\n{body}" if kind == "assistant" else body for kind, body in blocks]
+    out = [body for _, body in blocks]  # the lesson itself is plain prose
     return out, pending, state["quiet"]
 
 
@@ -274,7 +274,7 @@ def append(file, blocks):
 
 # --- commands --------------------------------------------------------------
 
-UNSAFE_NAME_RE = re.compile(r'[\\:*?"<>|#^\[\]]')  # not allowed in Obsidian note names
+UNSAFE_NAME_RE = re.compile(r'[\\:*?"<>|#^\[\]]')  # unsafe in file names or Markdown links
 
 
 def clean_segment(seg):
@@ -282,7 +282,7 @@ def clean_segment(seg):
 
 
 def resolve_path(arg):
-    """Topic -> note in the vault; explicit *.md / absolute / ~ paths are used as-is."""
+    """Topic -> note in the learn folder; explicit *.md / absolute / ~ paths are used as-is."""
     arg = (arg or "").strip().strip('"').strip("'")
     if not arg:
         return None
@@ -296,18 +296,18 @@ def resolve_path(arg):
     return folder / f"{parts[-1]}.md"
 
 
-def open_in_obsidian(path):
+def open_note(path):
+    """Open the note in the system's default app for .md files."""
     if os.environ.get("MD_LOG_NO_OPEN"):
         return
-    uri = "obsidian://open?path=" + urllib.parse.quote(str(path))
     try:
         if sys.platform == "win32":
-            os.startfile(uri)
+            os.startfile(str(path))
         else:
             opener = "open" if sys.platform == "darwin" else "xdg-open"
-            subprocess.Popen([opener, uri], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen([opener, str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
-        pass  # Obsidian (or xdg-open) not installed: logging still works
+        pass  # no opener available: logging still works
 
 
 def cmd_link(arg):
@@ -347,7 +347,7 @@ def cmd_link(arg):
                       "quiet": True}  # the rest of this turn is /md-log's own confirmation
         save_links(links)
     how = f"{len(blocks)} blocks backfilled" if fresh else "already has this session: appending from now on"
-    open_in_obsidian(path)
+    open_note(path)
     print(f"md-log: linked {path} ({how})")
     return 0
 
