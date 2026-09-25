@@ -18,7 +18,7 @@ This teaching system builds a **dependency graph in the learner's head** — axi
 
 Do NOT visualize when prose or a single equation already carries it. A decorative diagram that just restates the sentence next to it adds noise and a chance to be wrong.
 
-But in **structure-heavy subjects** — design patterns, system design and architecture, networking and protocols, data structures, algorithms, geometry — the core structure of each concept *is* the idea, and a learner who has only read it in prose hasn't seen it. There, drawing each concept's core structure is expected, not optional. The teach skill plans these visuals up front (Phase 2) and commissions them all in the background as soon as the plan is approved.
+But in **structure-heavy subjects** — design patterns, system design and architecture, networking and protocols, data structures, algorithms, geometry — the core structure of each concept *is* the idea, and a learner who has only read it in prose hasn't seen it. There, drawing each concept's core structure is expected, not optional. The teach skill plans these visuals up front (Phase 2) and commissions them in the background a few nodes ahead of the lesson.
 
 The real risk is a *false* picture, not a missing one: that's what the maker's render-and-inspect loop guards against. Decide based on whether the idea has shape, not on caution.
 
@@ -44,7 +44,7 @@ Keep the idea intact but trust the maker to compose; if your brief lists more th
 
 ## Invoke
 
-Dispatch the maker with the `Agent` tool — with `run_in_background: true` whenever you can keep teaching meanwhile (the usual case; the teach skill commissions all planned visuals at once this way). Several makers can run in parallel: one call per visual, all in the same message.
+Dispatch the maker with the `Agent` tool — with `run_in_background: true` whenever you can keep teaching meanwhile (the usual case; the teach skill keeps a rolling window of the next ~3 planned visuals in flight this way). Several makers can run in parallel: one call per visual, all in the same message.
 
 ```
 Agent(subagent_type: "learn:mermaid-maker", prompt: "<your minimal, concrete brief>")

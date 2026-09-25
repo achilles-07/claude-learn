@@ -233,6 +233,7 @@ def render(entries, pending=None, quiet=False):
                     add_user(c.get("text", ""), d.get("isMeta"))
                 elif c.get("type") == "tool_result" and c.get("tool_use_id") in pending:
                     qs = pending.pop(c["tool_use_id"])
+                    state["quiet"] = False  # the learner answered: this is a real lesson turn now
                     tur = d.get("toolUseResult")
                     answers = tur.get("answers") if isinstance(tur, dict) else None
                     add("answer", answer_block(qs, answers if isinstance(answers, dict) else {}))

@@ -72,7 +72,7 @@ The two principles are *how* you teach. This is *when* — the shape of a teachi
 
 **Session setup.** At the start of a teaching session, if the lesson isn't being logged yet, suggest once: "Run `/learn:md-log <topic>` (e.g. `/learn:md-log LLD/SOLID`) to follow the lesson as a Markdown note."
 
-**The log is the lesson — keep plumbing out of it.** Everything you write lands in the learner's notes. Never narrate tooling: no "using the teach skill", no remarks on logging, subagents, background research finishing, or "still waiting for you". When a background researcher finishes and nothing in the lesson changes, reply with nothing at all. If it *does* change something, state the correction as lesson content ("Correction: …").
+**The log is the lesson — keep plumbing out of it.** Everything you write lands in the learner's notes. Never narrate tooling: no "using the teach skill", no remarks on logging, subagents, background research finishing, or "still waiting for you". When a background task finishes (a researcher, a diagram maker) and nothing in the lesson changes, reply with one short status line such as "(diagram for node 3 ready)" and stop — an empty reply makes Claude Code demand a visible response, and background turns are kept out of the notes anyway. If it *does* change something, state the correction as lesson content ("Correction: …").
 
 **Accuracy is non-negotiable — verify, don't wing it from memory.** The learner has to be able to trust the teacher completely; one confidently-delivered hallucination poisons that. Working from memory alone is where LLMs invent things, so: **the moment you are even slightly unsure of any fact, name, date, formula, definition, or claim, stop and confirm it with a quick `researcher` subagent (`Agent` tool, `subagent_type: "learn:researcher"`) before you say it.** Pausing to verify is always acceptable — accuracy beats flow, every time. And if a check changes or corrects what you were about to teach, say so plainly rather than quietly papering over it. A wrong unconditional truth or a wrong "discovered" step doesn't just mislead — it corrupts every node built on top of it.
 
@@ -150,13 +150,18 @@ A good plan is what makes the teaching feel inevitable instead of arbitrary.
 
 **Then stop and wait for the learner's go-ahead.** The presented plan is their checkpoint: a wrong root or wrong scope is cheap to fix now, expensive mid-lesson. Do not begin Phase 3 until they okay the plan.
 
-**On the go-ahead, commission every planned visual at once, in the background.** Follow the `visualize` skill's briefing rules and dispatch one maker per planned visual — all in the same message, each with `run_in_background: true` — then start teaching immediately. They render in parallel while you teach the early nodes, so pictures are waiting when their node arrives. When a maker's result comes back, don't reply to it and don't interrupt the lesson — just note which filename belongs to which node, and embed it at that node's visual checkpoint (or in your very next lesson message, if its node is already under way).
+**The go-ahead turn has a fixed shape — follow it exactly:**
+1. **Teach node 1 in prose first:** its Motivate and Establish steps, written out in full. The learner must *read* teaching before they see any question. Never let a plan approval be followed directly by a quiz popup.
+2. **In that same message, commission visuals in the background** — but only for the next ~3 nodes that have one (a rolling window), not the whole plan. Follow the `visualize` skill's briefing rules, one maker per visual, each with `run_in_background: true`. Each time a node is finished, commission the visual for the next node entering the window. This keeps pictures ready just ahead of the lesson without a burst of a dozen agents.
+3. **Then** connect and quiz-check node 1, as for every node.
+
+The makers render while you teach, so pictures are waiting when their node arrives. When a maker's result comes back, don't reply to it and don't interrupt the lesson — just note which filename belongs to which node, and embed it at that node's visual checkpoint (or in your very next lesson message, if its node is already under way).
 
 ### Phase 3 — Teach (the loop)
 
 Build the learner's dependency graph one **node** at a time — and every node gets the same treatment, whether it's a foundational unconditional truth or a derived step. There is almost never just one; most topics need several, and each new one goes through the loop exactly like any other node:
 
-For **every node** (each unconditional truth *and* each non-trivial reasoning step toward the goal), run:
+For **every node** (each unconditional truth *and* each non-trivial reasoning step toward the goal), run the steps below **in order, and in prose before any question** — this holds for the first node as much as the tenth. A node never opens with a quiz: even a Socratic discovery question comes only after you've set up the scenario and the problem in writing.
 
 1. **Motivate.** Frame why we need this node right now — what problem it solves or what gap it closes. This applies to unconditional truths too: don't just assert one because it's true, motivate why *this* truth, *now*. "Why are we even bringing this in?"
 2. **Establish.**

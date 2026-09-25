@@ -293,6 +293,17 @@ class MdLogTest(unittest.TestCase):
         self.assertIn("![Observer structure](viz/viz-observer-1.png)", self.log())
         self.assertNotIn("Noted.", self.log())
 
+    def test_answering_a_quiz_ends_quiet_mode(self):
+        # a quiz asked in a background-woken turn: the learner's answer makes it a real turn again
+        self.write(user("go"), assistant(text("Node 1.")),
+                   user("<task-notification>\n<task-id>m</task-id>\n</task-notification>"),
+                   assistant(text("(diagram ready)"), ask_use("t5", [Q])),
+                   tool_result("t5", "", {"answers": {"What is $2+2$?": "4"}}),
+                   assistant(text("Right. Node 2 builds on that.")))
+        self.run_cli("link", "lesson.md")
+        self.assertNotIn("diagram ready", self.log())
+        self.assertIn("Node 2 builds on that", self.log())
+
     def test_synthetic_assistant_messages_not_logged(self):
         syn = assistant(text("No response requested."))
         syn["message"]["model"] = "<synthetic>"
