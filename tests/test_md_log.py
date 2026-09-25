@@ -413,6 +413,99 @@ class MdLogTest(unittest.TestCase):
         self.run_cli("link", "LLD/SOLID")
         self.assertEqual(self.run_cli("vizdir").stdout.strip(), str(self.vault / "LLD" / "viz"))
 
+    # --- subjects: /md-log-subject, /teach-subject, /teach-topic ---------------
+
+    def test_subject_creates_folder_and_plan_skeleton(self):
+        r = self.run_cli("subject", "HLD")
+        plan = self.vault / "HLD" / "HLD — Plan.md"
+        self.assertIn(str(plan), r.stdout)
+        text = plan.read_text()
+        for heading in ("# HLD — Plan", "## Goals", "## Where you are", "## Topic map", "## Topics"):
+            self.assertIn(heading, text)
+
+    def test_subject_never_overwrites_an_existing_plan(self):
+        self.run_cli("subject", "HLD")
+        plan = self.vault / "HLD" / "HLD — Plan.md"
+        plan.write_text("my plan")
+        self.run_cli("subject", "HLD")
+        self.assertEqual(plan.read_text(), "my plan")
+
+    def test_subject_does_not_log_the_planning_session(self):
+        self.write(user("hi"))
+        self.run_cli("link", "lesson.md")  # an earlier link must not swallow the planning chat
+        self.run_cli("subject", "HLD")
+        self.write(user("plan it"), assistant(text("probing...")))
+        self.hook()
+        self.assertNotIn("probing", self.log())
+        self.assertNotIn("probing", (self.vault / "HLD" / "HLD — Plan.md").read_text())
+
+    def test_plan_path_from_arg_or_session_subject(self):
+        self.assertIn("md-log error", self.run_cli("plan").stdout)
+        self.run_cli("subject", "HLD")
+        plan = str(self.vault / "HLD" / "HLD — Plan.md")
+        self.assertEqual(self.run_cli("plan").stdout.strip(), plan)
+        self.assertEqual(self.run_cli("plan", "HLD").stdout.strip(), plan)
+
+    def test_plan_with_free_text_falls_back_to_session_subject(self):
+        self.run_cli("subject", "HLD")
+        r = self.run_cli("plan", "focus on interviews, " + "breadth over depth " * 30)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), str(self.vault / "HLD" / "HLD — Plan.md"))
+
+    def test_commands_never_crash(self):
+        for args in (("plan", "x" * 5000), ("link", "y" * 5000), ("subject", "z" * 5000),
+                     ("topics", "HLD", "w" * 5000)):
+            r = self.run_cli(*args)
+            self.assertEqual(r.returncode, 0, (args[0], r.stderr[-300:]))
+            self.assertEqual(r.stderr, "", args[0])
+
+    def test_subjects_lists_every_planned_subject(self):
+        self.run_cli("subject", "HLD")
+        self.run_cli("subject", "Distributed Systems")
+        out = self.run_cli("subjects").stdout
+        self.assertIn("HLD\t", out)
+        self.assertIn("Distributed Systems\t", out)
+
+    def test_topics_creates_empty_numbered_notes(self):
+        self.run_cli("subject", "HLD")
+        r = self.run_cli("topics", "HLD", "Requirements & Estimation", "Load Balancing", "Caching")
+        folder = self.vault / "HLD"
+        for name in ("01 Requirements & Estimation.md", "02 Load Balancing.md", "03 Caching.md"):
+            self.assertTrue((folder / name).exists(), name)
+            self.assertEqual((folder / name).read_text(), "")
+            self.assertIn(name, r.stdout)
+
+    def test_topics_keeps_existing_notes(self):
+        self.run_cli("subject", "HLD")
+        self.run_cli("topics", "HLD", "Caching")
+        (self.vault / "HLD" / "01 Caching.md").write_text("lesson so far")
+        self.run_cli("topics", "HLD", "Load Balancing", "Caching")  # plan revised: new topic first
+        self.assertEqual((self.vault / "HLD" / "01 Caching.md").read_text(), "lesson so far")
+        self.assertTrue((self.vault / "HLD" / "01 Load Balancing.md").exists())
+        self.assertFalse((self.vault / "HLD" / "02 Caching.md").exists())
+
+    def test_link_finds_numbered_topic_note(self):
+        self.run_cli("subject", "HLD")
+        self.run_cli("topics", "HLD", "Load Balancing", "Caching")
+        r = self.run_cli("link", "HLD/caching")
+        self.assertIn(str(self.vault / "HLD" / "02 Caching.md"), r.stdout)
+
+    def test_link_from_now_logs_the_rest_of_the_same_turn(self):
+        # /teach-topic links mid-turn, then teaches in that same turn
+        self.write(user("<command-name>/learn:teach-topic</command-name>\n<command-args></command-args>"))
+        self.run_cli("link", "--from-now", "lesson.md")
+        self.write(assistant(text("Topic 1 starts here.")))
+        self.hook()
+        self.assertIn("Topic 1 starts here.", self.log())
+
+    def test_link_from_now_skips_backfill(self):
+        self.write(user("planning chatter"), assistant(text("plan text")))
+        self.run_cli("link", "--from-now", "lesson.md")
+        self.assertNotIn("planning chatter", self.log())
+        self.write(user("teach topic 1"), assistant(text("Topic 1 lesson.")))
+        self.hook()
+        self.assertIn("Topic 1 lesson.", self.log())
+
     def test_link_without_session_env(self):
         env = {k: v for k, v in self.env.items() if k != "CLAUDE_CODE_SESSION_ID"}
         r = subprocess.run(["python3", str(SCRIPT), "link", "x.md"], cwd=self.cwd, env=env,

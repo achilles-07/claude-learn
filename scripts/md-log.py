@@ -8,7 +8,15 @@ user prompts, assistant text, and AskUserQuestion Q&A. Other tools are omitted.
                            <learn dir>/<topic>/<topic>.md (or <learn dir>/<topic>/<subtopic>.md),
                            backfill, and open it in your default Markdown app. A *.md, /… or ~… argument
                            is used as a plain file path instead.
+  md-log.py link --from-now <topic>  same, but log only from now on (no backfill)
   md-log.py unlink         stop logging this session
+  md-log.py subject <Subject>   create <learn dir>/<Subject>/ and "<Subject> — Plan.md"
+                           (a skeleton, never overwritten); remembers it as this
+                           session's subject; the planning chat itself is not logged
+  md-log.py plan [<Subject>]    print the plan path (this session's subject by default)
+  md-log.py subjects       list every subject that has a plan: "<name>\t<plan path>"
+  md-log.py topics <Subject> <Topic>...  create empty numbered notes "01 <Topic>.md", …
+                           (keeps notes that already exist for a topic)
   md-log.py vizdir         where diagrams for this session go (viz/ next to the note)
   md-log.py hook           Stop/SessionEnd/PreToolUse hook: append what's new (silent)
 """
@@ -33,7 +41,11 @@ PROJECTS_DIR = Path(os.environ.get("MD_LOG_PROJECTS_DIR") or Path.home() / ".cla
 VAULT = Path(os.environ.get("LEARN_DIR") or os.environ.get("LEARN_VAULT") or os.environ.get("MD_LOG_VAULT")
              or Path.home() / "learn").expanduser()
 LINKS = STATE_DIR / "links.json"
-BACKFILLED = STATE_DIR / "backfilled.json"  # {file: [session ids already backfilled into it]}
+BACKFILLED = STATE_DIR / "backfilled.json"
+SUBJECTS = STATE_DIR / "subjects.json"  # {session id: plan path}
+PLAN_SUFFIX = " — Plan.md"
+PLAN_SKELETON = "# {name} — Plan\n\n## Goals\n\n## Where you are\n\n## Topic map\n\n## Topics\n"
+NUMBERED_RE = re.compile(r"^\d+\s+(.+)\.md$", re.IGNORECASE)  # {file: [session ids already backfilled into it]}
 ERRORS = STATE_DIR / "errors.log"
 
 SYSTEM_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
@@ -294,7 +306,28 @@ def resolve_path(arg):
     if not parts:
         return None
     folder = VAULT.joinpath(*(parts if len(parts) == 1 else parts[:-1]))
-    return folder / f"{parts[-1]}.md"
+    exact = folder / f"{parts[-1]}.md"
+    return exact if exact.exists() else (find_topic_note(folder, parts[-1]) or exact)
+
+
+def find_topic_note(folder, topic):
+    """A subject's topic note, "NN <Topic>.md", matched case-insensitively."""
+    if not folder.is_dir():
+        return None
+    for f in sorted(folder.glob("*.md")):
+        m = NUMBERED_RE.match(f.name)
+        if m and m.group(1).strip().lower() == topic.strip().lower():
+            return f
+    return None
+
+
+def subject_folder(arg):
+    parts = [c for c in (clean_segment(seg) for seg in (arg or "").strip().strip('"').split("/")) if c]
+    return VAULT.joinpath(*parts) if parts else None
+
+
+def plan_of(folder):
+    return folder / f"{folder.name}{PLAN_SUFFIX}"
 
 
 def open_note(path):
@@ -311,7 +344,7 @@ def open_note(path):
         pass  # no opener available: logging still works
 
 
-def cmd_link(arg):
+def cmd_link(arg, from_now=False):
     # Always exit 0: a failing `!` command aborts the slash command's turn.
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
     if not sid:
@@ -334,6 +367,10 @@ def cmd_link(arg):
         # /md-log) must not duplicate it: backfill each session into a file once.
         backfilled = load_json(BACKFILLED)
         fresh = sid not in backfilled.get(str(path), [])
+        if from_now:  # e.g. /teach-topic after planning in the same session
+            fresh = False
+            if sid not in backfilled.get(str(path), []):
+                backfilled.setdefault(str(path), []).append(sid)
         blocks, pending, _ = render(entries) if fresh else ([], {}, True)
         backfilled.setdefault(str(path), [])
         if fresh:
@@ -345,11 +382,92 @@ def cmd_link(arg):
             path.touch()
         links[sid] = {"file": str(path), "transcript": str(transcript) if transcript else None,
                       "offset": n, "pending": pending,
-                      "quiet": True}  # the rest of this turn is /md-log's own confirmation
+                      # after /md-log the rest of the turn is its own confirmation; after a
+                      # mid-turn --from-now link (/teach-topic) it is the lesson itself
+                      "quiet": not from_now}
         save_links(links)
-    how = f"{len(blocks)} blocks backfilled" if fresh else "already has this session: appending from now on"
+    how = (f"{len(blocks)} blocks backfilled" if fresh
+           else "logging from now on" if from_now else "already has this session: appending from now on")
     open_note(path)
     print(f"md-log: linked {path} ({how})")
+    return 0
+
+
+def cmd_subject(arg):
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    folder = subject_folder(arg)
+    if folder is None:
+        print("md-log usage: /md-log-subject <Subject>  (e.g. /md-log-subject HLD)")
+        return 0
+    folder.mkdir(parents=True, exist_ok=True)
+    plan = plan_of(folder)
+    if not plan.exists():
+        plan.write_text(PLAN_SKELETON.format(name=folder.name), encoding="utf-8")
+    with locked():
+        links = load_links()
+        if links.pop(sid, None):  # planning is summarized in the plan, not mirrored anywhere
+            save_links(links)
+        subjects = load_json(SUBJECTS)
+        subjects[sid] = str(plan)
+        save_json(SUBJECTS, subjects)
+    open_note(plan)
+    print(f"md-log: subject {folder.name} — plan {plan}")
+    return 0
+
+
+def list_subjects():
+    if not VAULT.is_dir():
+        return []
+    return [(str(p.parent.relative_to(VAULT)), p) for p in sorted(VAULT.glob(f"**/*{PLAN_SUFFIX}"))
+            if p.name == f"{p.parent.name}{PLAN_SUFFIX}"]
+
+
+def cmd_plan(arg):
+    # The argument may name a subject, or just be extra context the learner typed
+    # after /teach-subject: use it as a subject only if one by that name exists.
+    candidates = []
+    if (arg or "").strip():
+        folder = subject_folder(arg)
+        if folder is not None:
+            candidates.append(plan_of(folder))
+    session_plan = load_json(SUBJECTS).get(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
+    if session_plan:
+        candidates.append(Path(session_plan))
+    for plan in candidates:
+        try:
+            if plan.exists():
+                print(plan)
+                return 0
+        except OSError:  # e.g. a paragraph of context is not a valid file name
+            continue
+    known = ", ".join(name for name, _ in list_subjects()) or "none yet"
+    print(f"md-log error: no subject plan found. Subjects: {known}. Start one with /md-log-subject <Subject>.")
+    return 0
+
+
+def cmd_subjects():
+    rows = list_subjects()
+    print("\n".join(f"{name}\t{plan}" for name, plan in rows) if rows else "md-log: no subjects yet")
+    return 0
+
+
+def cmd_topics(subject, names):
+    folder = subject_folder(subject)
+    if folder is None or not names:
+        print('md-log usage: md-log.py topics <Subject> "<Topic 1>" "<Topic 2>" ...')
+        return 0
+    folder.mkdir(parents=True, exist_ok=True)
+    for i, raw in enumerate(names, 1):
+        name = clean_segment(raw)
+        if not name:
+            continue
+        existing = find_topic_note(folder, name)
+        if existing:
+            print(f"kept {existing}")
+            continue
+        note = folder / f"{i:02d} {name}.md"
+        note.touch()
+        print(f"created {note}")
     return 0
 
 
@@ -432,9 +550,28 @@ def cmd_hook():
 
 
 def main(argv):
+    try:
+        return dispatch(argv)
+    except Exception as e:  # a failing `!` command would abort the slash command's turn
+        log_error()
+        print(f"md-log error: {e}")
+        return 0
+
+
+def dispatch(argv):
     cmd = argv[1] if len(argv) > 1 else ""
+    args = argv[2:]
     if cmd == "link":
-        return cmd_link(" ".join(argv[2:]))
+        from_now = bool(args) and args[0] == "--from-now"
+        return cmd_link(" ".join(args[1:] if from_now else args), from_now)
+    if cmd == "subject":
+        return cmd_subject(" ".join(args))
+    if cmd == "plan":
+        return cmd_plan(" ".join(args))
+    if cmd == "subjects":
+        return cmd_subjects()
+    if cmd == "topics":
+        return cmd_topics(args[0] if args else "", args[1:])
     if cmd == "unlink":
         return cmd_unlink()
     if cmd == "vizdir":

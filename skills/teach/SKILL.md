@@ -1,6 +1,6 @@
 ---
 name: teach
-description: Teach the user a topic so it is understood, not memorized — probe their level, plan a dependency map, then teach node by node with quizzes. Use only when the user explicitly asks to learn, study, or be taught a topic ("teach me X", "I want to understand X", "help me learn X", "quiz me on X"). Not for routine explanations during coding or other work — including development work inside the learn folder itself.
+description: Teach the user a topic so it is understood, not memorized — probe their level, plan a dependency map, then teach node by node with quizzes. Also plans whole subjects into one-session topics (/learn:teach-subject) and teaches them one at a time (/learn:teach-topic). Use only when the user explicitly asks to learn, study, or be taught a topic ("teach me X", "I want to understand X", "help me learn X", "quiz me on X"). Not for routine explanations during coding or other work — including development work inside the learn folder itself.
 ---
 
 # Teaching
@@ -174,6 +174,55 @@ For **every node** (each unconditional truth *and* each non-trivial reasoning st
 Repeat this full loop per node — don't front-load all the foundations once at the start and then stop checking. Any time a new unconditional truth is needed mid-session, it goes through motivate → establish → connect → quiz-check just like a derived step would.
 
 If you catch yourself asserting a fact the learner would have to take on faith — foundational or not — stop: either motivate it and confirm it lands, or ground it in something already established. Unmotivated, unconfirmed facts don't lock in — that's the whole point.
+
+## Subjects — one plan, then one topic per session
+
+A big subject (HLD, distributed systems, compilers) doesn't fit in one session. It gets the same method one level up: plan the whole subject once, then teach it a topic at a time, each topic a normal probe → plan → teach session. The learner drives this with three commands; the script is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/md-log.py"`.
+
+- `/learn:md-log-subject <Subject>` creates `<learn dir>/<Subject>/` and an empty plan doc, `<Subject> — Plan.md`.
+- `/learn:teach-subject` runs **Subject mode** below.
+- `/learn:teach-topic [Subject/Topic]` runs **Topic mode** below.
+
+### Subject mode — `/teach-subject`
+
+The output is a plan, not a lesson: teach nothing yet, and the planning conversation itself isn't logged — its results go into the plan doc.
+
+1. **Probe at subject scale (Phase 1).** Same rules — bracket the edge on every strand with batched quizzes, binary-search it — but the strands are the subject's big prerequisite areas (for HLD: networking, databases, caching, consistency, capacity math…), and each question is a probe, not a teaching moment. Then pin down the goal with `AskUserQuestion`: what it's for (interviews, real design work, curiosity), breadth vs depth, and any topics the learner already knows they want in or out.
+2. **Plan at subject scale (Phase 2).** Scope the subject with a `researcher` subagent first. Then build the dependency map with **topics** as its nodes: foundational topics at the roots, each topic hanging off the topics it needs, the learner's goal as the sink. Size each topic to one session — something whose own map would have roughly 4–8 concept nodes; split anything bigger. Order topics so every prerequisite comes first. Skip topics the probe showed are already solid, and say so.
+3. **Present and wait for approval,** exactly as in Phase 2: the approach in prose, the topic map as a small ```mermaid``` graph, then the numbered topic list — each with a one-line scope and its prerequisites. No planned visuals at this level; each topic plans its own.
+4. **On approval, write the plan doc** (replace its whole content with the `Write` tool):
+
+   ```markdown
+   # <Subject> — Plan
+
+   ## Goals
+   <what the learner wants and why, in a few sentences>
+
+   ## Where you are
+   <per strand: what's solid, where the edge is, misconceptions caught — from the probe>
+
+   ## Topic map
+   <the mermaid topic map>
+
+   ## Topics
+   | # | Topic | Scope | Prerequisites | Status |
+   |---|---|---|---|---|
+   | 01 | [Requirements & Estimation](<01 Requirements & Estimation.md>) | … | — | Not started |
+   ```
+
+   Then create the topic notes — empty files, numbered in teaching order, names exactly as in the table:
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/md-log.py" topics "<Subject>" "<Topic 1>" "<Topic 2>" …`
+   Finish by telling the learner to start with `/learn:teach-topic`.
+
+If the learner revises the plan later, rewrite the plan doc and rerun `topics` with the new order: existing notes are kept, only new topics get new files.
+
+### Topic mode — `/teach-topic`
+
+1. **Pick the topic.** Get the plan doc with `md-log.py plan [<Subject>]`. If the learner named a topic, use it; otherwise take the first topic in the table whose Status isn't Done. If a prerequisite topic isn't Done, say so and offer to do it first.
+2. **Start logging to its note** before writing anything else: `md-log.py link --from-now "<Subject>/<Topic>"`. (`--from-now` keeps any earlier planning chat out of the note.) Set the topic's Status to *In progress* in the plan doc (`Edit`).
+3. **Read the plan doc** — goals, "Where you are", this topic's scope and prerequisites, and what earlier topics recorded. This replaces most of Phase 1: don't re-probe the whole subject and don't re-ask the goals. Run one quick batched quiz on the prerequisites this topic leans on, and on anything the plan left uncertain, then go straight to Phase 2.
+4. **Teach it as a normal session:** Phase 2 for this topic's scope only (dependency map, planned visuals, approval), then Phase 3, node by node.
+5. **Close the loop.** When the topic's map is done, update the plan doc: Status → `Done <YYYY-MM-DD>`, and add a line under "Where you are" for this topic — where the edge moved, misconceptions caught, anything to revisit. Then name the next topic and suggest `/learn:teach-topic`.
 
 ## Voice — a friend who knows the subject, writing like a good book
 

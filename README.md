@@ -16,6 +16,7 @@ Turn Claude Code into a tutor that teaches for *understanding*, not memorization
 | `agents/researcher` | Web fact-checker (WebSearch + WebFetch) |
 | `agents/mermaid-maker`, `agents/svg-maker` | Render → inspect → iterate → publish diagram makers |
 | `commands/md-log`, `commands/md-unlog` | Start and stop logging to a topic note |
+| `commands/md-log-subject`, `commands/teach-subject`, `commands/teach-topic` | Big subjects: a plan doc, then one topic per session |
 | `hooks/hooks.json` + `scripts/md-log.py` | Mirror the session into the note (Stop, SessionEnd, and before each quiz popup) |
 | `scripts/render.py` | Cross-platform rendering for the makers |
 
@@ -105,10 +106,18 @@ Lessons go into `~/learn` by default (`%USERPROFILE%\learn` on Windows). To use 
 
 On Windows use a path like `"C:\\Users\\you\\Documents\\learn"`.
 
+**Start Claude from your learn folder** (`cd ~/learn && claude`). Claude Code asks permission before reading or writing files outside the folder it was started in, and the teacher edits plan docs as you go. If you'd rather start Claude anywhere, let it into the learn folder permanently:
+
+```json
+{
+  "permissions": { "additionalDirectories": ["~/learn"] }
+}
+```
+
 ## Use it
 
 ```
-cd ~/learn            # or anywhere: notes always go to the learn folder
+cd ~/learn            # recommended (see "Where notes go"); notes always land here anyway
 claude
 /learn:md-log LLD/Strategy
 /learn:teach Strategy pattern. I know basic OOP; focus on when to use it vs State
@@ -120,7 +129,22 @@ claude
 - Diagrams are saved to `viz/` next to the note and embedded inline.
 - `/learn:md-unlog` stops logging.
 
-Answer the quiz popups in the terminal and read the lesson in your Markdown reader. Pick **Other → idk** when you don't know an answer; that's a useful signal, not a wrong answer. You don't call `visualize`, the researcher or the diagram makers yourself: the teacher uses them.
+Answer the quiz popups in the terminal and read the lesson in your Markdown reader.
+
+### Big subjects: plan once, then one topic per session
+
+For something too big for one sitting (HLD, distributed systems, compilers):
+
+```
+/learn:md-log-subject HLD      # creates ~/learn/HLD/ and an empty "HLD — Plan.md"
+/learn:teach-subject           # probes your level, asks your goals, proposes a topic plan
+                               # → on approval: the plan doc is filled in, and empty notes
+                               #   "01 Requirements & Estimation.md", "02 Load Balancing.md", … are created
+/learn:teach-topic             # teaches the next unfinished topic into its note
+/learn:teach-topic HLD/Caching # or a specific one
+```
+
+The plan doc holds your goals, where you stand on each strand, the topic map, and a table of topics with scope, prerequisites and status. Each `/learn:teach-topic` reads it (so it doesn't re-probe you from scratch), teaches that topic as a normal session, and marks it done at the end with a note on what moved. The planning conversation itself isn't logged; its results are in the plan. Pick **Other → idk** when you don't know an answer; that's a useful signal, not a wrong answer. You don't call `visualize`, the researcher or the diagram makers yourself: the teacher uses them.
 
 When nothing else defines them, the short forms `/md-log` and `/teach` also work, and saying "teach me X" triggers the skill too.
 
@@ -134,7 +158,7 @@ When nothing else defines them, the short forms `/md-log` and `/teach` also work
 ## Development
 
 ```bash
-python3 tests/test_md_log.py      # 36 tests for the lesson logger
+python3 tests/test_md_log.py      # 47 tests for the lesson logger
 ```
 
 ## Credits
