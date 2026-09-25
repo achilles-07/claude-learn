@@ -1,0 +1,8 @@
+{
+  "name": "learn",
+  "version": "1.0.0",
+  "description": "A teaching system for Claude Code: probe → plan → teach with graded quizzes, verified diagrams, a fact-checking researcher, and a live Obsidian lesson log.",
+  "author": { "name": "Umang Pandey" },
+  "repository": "https://github.com/achilles-07/claude-learn",
+  "keywords": ["learning", "teaching", "obsidian", "quiz", "education"]
+}

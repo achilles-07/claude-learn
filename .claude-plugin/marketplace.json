@@ -1,0 +1,11 @@
+{
+  "name": "claude-learn",
+  "owner": { "name": "Umang Pandey" },
+  "plugins": [
+    {
+      "name": "learn",
+      "source": "./",
+      "description": "Teach-me system: probe → plan → teach with quizzes, diagrams and an Obsidian lesson log."
+    }
+  ]
+}
