@@ -461,8 +461,10 @@ def guard(data, link):
     need = GUARD_MIN_AFTER_PROMPT if light else GUARD_MIN_AFTER_ANSWER
     if chars >= need:
         return None
-    order = ("Write that text first, then register the key, then ask — text written after the key "
-             "command isn't seen in time.")
+    order = ("Only your visible reply counts: anything you put in your thinking is not shown in the "
+             "lesson or logged, so write it out as normal reply text. Write that text first, then register "
+             "the key, then ask — text written after the key command isn't seen in time. Don't debug md-log: "
+             "just write the reply.")
     reason = ("Teaching guard: the learner has just answered and hasn't seen a written reply yet. "
               "Don't ask another question now. First respond to their answer and teach what the next "
               "question will check, as visible text. " + order) if after_answer else (
