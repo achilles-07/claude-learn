@@ -68,7 +68,7 @@ If it returns `RESULT: NONE`, it couldn't make a correct picture of the brief �
 Put the embed directly in your teaching reply as a standard Markdown image, with a short description as the alt text and the returned **filename** under `viz/`:
 
 ```
-![Observer: subject notifies observers through an interface](viz/viz-<slug>-<timestamp>.png)
+![Retries: three attempts with growing waits](viz/viz-<slug>-<timestamp>.png)
 ```
 
 That's all. `md-log` mirrors your reply text verbatim into the lesson note, and the maker saved the PNG into the `viz/` folder right next to that note — so the relative link renders inline in any Markdown reader. Use standard Markdown only (no wiki-style `![[…]]` embeds or size suffixes). Introduce the visual in a sentence, then let it carry the idea — don't narrate every element back in prose.

@@ -17,6 +17,7 @@ Turn Claude Code into a tutor that teaches for *understanding*, not memorization
 | `agents/mermaid-maker`, `agents/svg-maker` | Render → inspect → iterate → publish diagram makers |
 | `commands/md-log`, `commands/md-unlog` | Start and stop logging to a topic note |
 | `commands/md-log-subject`, `commands/teach-subject`, `commands/teach-topic` | Big subjects: a plan doc, then one topic per session |
+| `commands/reset-topic` | Clear a topic's note and start it over (old content saved, plan status reset) |
 | `hooks/hooks.json` + `scripts/md-log.py` | Mirror the session into the note (Stop, SessionEnd, and before each quiz popup) |
 | `scripts/render.py` | Cross-platform rendering for the makers |
 
@@ -131,6 +132,16 @@ claude
 
 Answer the quiz popups in the terminal and read the lesson in your Markdown reader.
 
+### How quizzes stay honest
+
+Like the pi original's `quiz` tool, grading never depends on the model remembering to do it. In a logged lesson, hooks enforce three rules:
+
+- **Answer key first.** Before every quiz the teacher registers the correct answer and an explanation (`md-log.py key`). A quiz without a key is blocked. The key stays hidden until you answer.
+- **Automatic grading.** When you answer, md-log checks your pick against the key and writes ✓ / ✗ / *not known yet*, the correct answer and the explanation into your note.
+- **No quiz without teaching.** A check can't be asked unless real teaching has been written since your last answer or message, so "quiz, quiz, quiz" can't happen. Warm-up probe questions only need a short intro.
+
+If a quiz is blocked, Claude Code shows it as a "hook error" and the teacher corrects itself. You don't need to do anything. md-log also keeps a copy of every note and restores one that suddenly shrinks, if an editor or tool wipes it.
+
 ### Big subjects: plan once, then one topic per session
 
 For something too big for one sitting (HLD, distributed systems, compilers):
@@ -142,7 +153,10 @@ For something too big for one sitting (HLD, distributed systems, compilers):
                                #   "01 Requirements & Estimation.md", "02 Load Balancing.md", … are created
 /learn:teach-topic             # teaches the next unfinished topic into its note
 /learn:teach-topic HLD/Caching # or a specific one
+/learn:reset-topic HLD/Caching # clear a topic's note and start it over
 ```
+
+Don't empty a note in your editor to start over: md-log keeps a copy of every note and restores one that suddenly shrinks (protection against editors or tools wiping it). `/learn:reset-topic` is the way to clear one — the old content is saved in `~/.claude/md-log/recovered/`.
 
 The plan doc holds your goals, where you stand on each strand, the topic map, and a table of topics with scope, prerequisites and status. Each `/learn:teach-topic` reads it (so it doesn't re-probe you from scratch), teaches that topic as a normal session, and marks it done at the end with a note on what moved. The planning conversation itself isn't logged; its results are in the plan. Pick **Other → idk** when you don't know an answer; that's a useful signal, not a wrong answer. You don't call `visualize`, the researcher or the diagram makers yourself: the teacher uses them.
 
@@ -158,7 +172,7 @@ When nothing else defines them, the short forms `/md-log` and `/teach` also work
 ## Development
 
 ```bash
-python3 tests/test_md_log.py      # 47 tests for the lesson logger
+python3 tests/test_md_log.py      # 69 tests for the lesson logger
 ```
 
 ## Credits

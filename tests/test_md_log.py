@@ -50,7 +50,7 @@ class MdLogTest(unittest.TestCase):
         self.env = {**os.environ, "MD_LOG_STATE_DIR": str(self.state),
                     "MD_LOG_PROJECTS_DIR": str(self.projects), "CLAUDE_CODE_SESSION_ID": SID,
                     "MD_LOG_SYNC": "1",  # run hooks inline so assertions don't race the detached worker
-                    "MD_LOG_VAULT": str(self.tmp / "vaultroot"), "MD_LOG_NO_OPEN": "1"}
+                    "MD_LOG_VAULT": str(self.tmp / "vaultroot"), "MD_LOG_NO_OPEN": "1", "MD_LOG_GUARD_WAIT": "0.5"}
         self.vault = self.tmp / "vaultroot"
 
     def write(self, *entries, partial=None):
@@ -64,10 +64,12 @@ class MdLogTest(unittest.TestCase):
         return subprocess.run(["python3", str(SCRIPT), *args], cwd=self.cwd, env=self.env,
                               input=stdin, capture_output=True, text=True)
 
-    def hook(self, sid=SID, event="Stop", tool_use_id=None):
+    def hook(self, sid=SID, event="Stop", tool_use_id=None, tool_name=None):
         data = {"session_id": sid, "transcript_path": str(self.transcript), "hook_event_name": event}
         if tool_use_id:
             data["tool_use_id"] = tool_use_id
+        if tool_name:
+            data["tool_name"] = tool_name
         return self.run_cli("hook", stdin=json.dumps(data))
 
     def log(self):
@@ -505,6 +507,214 @@ class MdLogTest(unittest.TestCase):
         self.write(user("teach topic 1"), assistant(text("Topic 1 lesson.")))
         self.hook()
         self.assertIn("Topic 1 lesson.", self.log())
+
+    # --- quiz guard: no quiz without written grading/teaching since the last answer ---
+
+    def ask(self, tid, questions=None):
+        data = {"session_id": SID, "transcript_path": str(self.transcript), "hook_event_name": "PreToolUse",
+                "tool_name": "AskUserQuestion", "tool_use_id": tid, "tool_input": {"questions": questions or [Q]}}
+        return self.run_cli("hook", stdin=json.dumps(data))
+
+    def key(self, correct="4", question=None, explanation="Two plus two is four.", **extra):
+        body = {"question": question or Q["question"], "correct": correct, "explanation": explanation, **extra}
+        return self.run_cli("key", stdin=json.dumps(body))
+
+    def answered(self, tid):
+        return tool_result(tid, "...", {"questions": [Q], "answers": {"What is $2+2$?": "4"}})
+
+    LONG = "Correct. " + "Here is why the answer holds, traced step by step. " * 4
+
+    def test_guard_blocks_quiz_right_after_an_answer(self):
+        self.run_cli("link", "lesson.md")
+        self.write(user("go"), assistant(text("Intro to the idea."), ask_use("t1", [Q])), self.answered("t1"),
+                   assistant(ask_use("t2", [Q])))
+        r = self.ask("t2")
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("grade", out["permissionDecisionReason"].lower())
+
+    def test_guard_allows_quiz_after_written_grading(self):
+        self.run_cli("link", "lesson.md")
+        self.write(user("go"), assistant(text("Intro to the idea."), ask_use("t1", [Q])), self.answered("t1"),
+                   assistant(text(self.LONG), ask_use("t2", [Q])))
+        self.key()
+        self.assertEqual(self.ask("t2").stdout.strip(), "")
+
+    def test_guard_allows_first_question_after_a_prompt(self):
+        self.run_cli("link", "lesson.md")
+        self.write(user("teach me"), assistant(text("Three quick questions first."), ask_use("t1", [Q])))
+        self.key(kind="probe")
+        self.assertEqual(self.ask("t1").stdout.strip(), "")
+
+    def test_check_right_after_a_prompt_needs_real_teaching(self):
+        # the LLD failure: learner says "start", teacher fires a check with no teaching
+        self.run_cli("link", "lesson.md")
+        self.write(user("start"), assistant(text("Let's begin.")))
+        self.key()
+        out = json.loads(self.ask("t1").stdout)["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("then register", out["permissionDecisionReason"])
+
+    def test_guard_ignores_unlinked_sessions(self):
+        self.write(user("go"), assistant(ask_use("t1", [Q])), self.answered("t1"), assistant(ask_use("t2", [Q])))
+        self.assertEqual(self.ask("t2").stdout.strip(), "")
+
+    def test_guard_blocks_when_nothing_was_written_even_if_tool_use_not_flushed(self):
+        # interactive Claude Code: at PreToolUse the teacher's text is in the transcript,
+        # but the AskUserQuestion tool_use line itself is written only after the answer
+        self.run_cli("link", "lesson.md")
+        self.key()
+        self.write(user("go"), assistant(text("Intro."), ask_use("t1", [Q])), self.answered("t1"))
+        out = json.loads(self.ask("t2").stdout)["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+
+    def test_guard_allows_when_text_flushed_but_tool_use_not(self):
+        self.run_cli("link", "lesson.md")
+        self.key()
+        self.write(user("go"), assistant(text("Intro."), ask_use("t1", [Q])), self.answered("t1"),
+                   assistant(text(self.LONG)))
+        self.assertEqual(self.ask("t2").stdout.strip(), "")
+
+    def test_question_logged_live_from_hook_input(self):
+        # the tool_use line isn't in the transcript yet; the question must still reach the note now
+        self.run_cli("link", "lesson.md")
+        self.key()
+        self.write(user("go"), assistant(text(self.LONG)))
+        self.assertEqual(self.ask("t9").stdout.strip(), "")  # guard allows it, and the question is logged
+        log = self.log()
+        self.assertIn(self.LONG.strip()[:40], log)
+        self.assertIn("Arithmetic", log)
+        self.assertLess(log.index(self.LONG.strip()[:40]), log.index("Arithmetic"))
+        # later the tool_use and the answer land: no duplicate question, verdict appears
+        self.write(assistant(ask_use("t9", [Q])),
+                   tool_result("t9", "...", {"questions": [Q], "answers": {Q["question"]: "4"}}))
+        self.hook()
+        log = self.log()
+        self.assertEqual(log.count("What is $2+2$?"), 1)
+        self.assertIn("Correct", log)
+
+    def test_denied_question_is_not_logged(self):
+        self.run_cli("link", "lesson.md")
+        Q2 = {**Q, "header": "Denied one"}
+        self.write(user("go"), assistant(text("Intro."), ask_use("t1", [Q])), self.answered("t1"),
+                   assistant(ask_use("t2", [Q2])))
+        self.ask("t2")
+        self.write(tool_result("t2", "blocked by hook"), assistant(text(self.LONG), ask_use("t3", [Q])))
+        self.key()
+        self.ask("t3")
+        self.hook()
+        self.assertNotIn("Denied one", self.log())
+        self.assertIn(self.LONG.strip()[:40], self.log())
+
+    # --- answer keys: grading is written by md-log, not left to the model --------
+
+    def test_quiz_without_answer_key_is_denied(self):
+        self.run_cli("link", "lesson.md")
+        self.write(user("teach me"), assistant(text("Here is the setup for the question."), ask_use("t1", [Q])))
+        out = json.loads(self.ask("t1").stdout)["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "deny")
+        self.assertIn("answer key", out["permissionDecisionReason"])
+
+    def answer_with(self, choice):
+        self.run_cli("link", "lesson.md")
+        self.key()
+        self.write(user("go"), assistant(text("Setup text."), ask_use("t1", [Q])),
+                   tool_result("t1", "...", {"questions": [Q], "answers": {Q["question"]: choice}}))
+        self.hook()
+        return self.log()
+
+    def test_correct_answer_is_graded_in_the_note(self):
+        log = self.answer_with("4")
+        self.assertIn("> **✓ Correct**", log)
+        self.assertIn("Two plus two is four.", log)
+
+    def test_wrong_answer_shows_the_correct_one(self):
+        log = self.answer_with("3")
+        self.assertIn("> **✗ Incorrect** — answer: 4", log)
+        self.assertIn("Two plus two is four.", log)
+
+    def test_idk_is_not_known_yet(self):
+        log = self.answer_with("idk")
+        self.assertIn("> **Not known yet** — answer: 4", log)
+
+    def test_key_never_appears_before_the_answer(self):
+        self.run_cli("link", "lesson.md")
+        self.key()
+        self.write(user("go"), assistant(text("Setup text."), ask_use("t1", [Q])))
+        self.hook(event="PreToolUse", tool_use_id="t1")
+        self.assertNotIn("Two plus two is four.", self.log())
+
+    def test_key_matches_despite_idk_suffix_and_formatting(self):
+        self.run_cli("link", "lesson.md")
+        self.key(question="How does a *hash map* look up a key?")
+        asked = {**Q, "question": "How does a hash map look up a key? (Pick *Other* and type *idk* if you don't know.)"}
+        self.write(user("teach me"), assistant(text(self.LONG), ask_use("t1", [asked])))
+        self.assertEqual(self.ask("t1", [asked]).stdout.strip(), "")
+
+    def test_ungraded_question_gets_no_verdict(self):
+        self.run_cli("link", "lesson.md")
+        self.key(correct=None, explanation=None, ungraded=True)
+        self.write(user("go"), assistant(text("Setup text."), ask_use("t1", [Q])),
+                   tool_result("t1", "...", {"questions": [Q], "answers": {Q["question"]: "4"}}))
+        self.hook()
+        for word in ("Correct", "Incorrect", "Not known yet"):
+            self.assertNotIn(word, self.log())
+
+    # --- self-healing notes -----------------------------------------------------
+
+    def test_truncated_note_is_restored_on_next_write(self):
+        self.write(user("first part of the lesson"))
+        self.run_cli("link", "lesson.md")
+        (self.cwd / "lesson.md").write_text("")  # an editor or tool wipes the note
+        self.write(user("go"), assistant(text("second part")))
+        self.hook()
+        log = self.log()
+        self.assertIn("first part of the lesson", log)
+        self.assertIn("second part", log)
+        self.assertLess(log.index("first part"), log.index("second part"))
+        self.assertTrue(list((self.state / "recovered").glob("*.md")))
+
+    def test_reset_clears_note_for_good(self):
+        self.write(user("old lesson"))
+        self.run_cli("link", "lesson.md")
+        r = self.run_cli("reset", "lesson.md")
+        self.assertIn("reset", r.stdout)
+        self.assertEqual(self.log(), "")
+        self.assertTrue(list((self.state / "recovered").glob("*.md")))  # old content kept aside
+        self.write(user("go"), assistant(text("new start")))
+        self.hook()  # the old session is unlinked: nothing comes back
+        self.assertEqual(self.log(), "")
+        self.run_cli("link", "--from-now", "lesson.md")
+        self.write(user("again"), assistant(text("fresh lesson")))
+        self.hook()
+        self.assertNotIn("old lesson", self.log())
+        self.assertIn("fresh lesson", self.log())
+
+    def test_reset_topic_sets_plan_status_back(self):
+        self.run_cli("subject", "HLD")
+        self.run_cli("topics", "HLD", "Load Balancing", "Caching")
+        plan = self.vault / "HLD" / "HLD — Plan.md"
+        plan.write_text(plan.read_text() + "| 01 | [Load Balancing](<01 Load Balancing.md>) | x | — | Done 2026-09-27 |\n"
+                        "| 02 | [Caching](<02 Caching.md>) | y | 01 | In progress |\n")
+        (self.vault / "HLD" / "02 Caching.md").write_text("half a lesson")
+        r = self.run_cli("reset", "HLD/Caching")
+        self.assertIn("Not started", r.stdout)
+        text = plan.read_text()
+        self.assertIn("| 02 | [Caching](<02 Caching.md>) | y | 01 | Not started |", text)
+        self.assertIn("| Done 2026-09-27 |", text)  # other topics untouched
+        self.assertEqual((self.vault / "HLD" / "02 Caching.md").read_text(), "")
+
+    def test_learner_additions_are_kept(self):
+        self.write(user("lesson text"))
+        self.run_cli("link", "lesson.md")
+        with open(self.cwd / "lesson.md", "a") as f:
+            f.write("\nmy own note\n")
+        self.write(user("go"), assistant(text("more")))
+        self.hook()
+        log = self.log()
+        self.assertIn("my own note", log)
+        self.assertIn("more", log)
+        self.assertEqual(log.count("lesson text"), 1)
 
     def test_link_without_session_env(self):
         env = {k: v for k, v in self.env.items() if k != "CLAUDE_CODE_SESSION_ID"}

@@ -20,9 +20,11 @@ user prompts, assistant text, and AskUserQuestion Q&A. Other tools are omitted.
   md-log.py vizdir         where diagrams for this session go (viz/ next to the note)
   md-log.py hook           Stop/SessionEnd/PreToolUse hook: append what's new (silent)
 """
+import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -47,6 +49,12 @@ PLAN_SUFFIX = " — Plan.md"
 PLAN_SKELETON = "# {name} — Plan\n\n## Goals\n\n## Where you are\n\n## Topic map\n\n## Topics\n"
 NUMBERED_RE = re.compile(r"^\d+\s+(.+)\.md$", re.IGNORECASE)  # {file: [session ids already backfilled into it]}
 ERRORS = STATE_DIR / "errors.log"
+KEYS = STATE_DIR / "keys.json"  # {session id: {normalized question: answer key}}
+SHADOW_DIR = STATE_DIR / "shadow"        # what md-log last wrote to each note
+RECOVERED_DIR = STATE_DIR / "recovered"  # damaged versions of notes md-log repaired
+GUARD_WAIT_S = float(os.environ.get("MD_LOG_GUARD_WAIT") or 2.0)  # max wait for the transcript to settle
+GUARD_MIN_AFTER_ANSWER = 150  # chars of visible text required between an answer and the next quiz
+GUARD_MIN_AFTER_PROMPT = 20
 
 SYSTEM_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 CMD_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>", re.S)
@@ -140,10 +148,30 @@ def wait_for_flush(transcript, needles, timeout):
         try:
             data = Path(transcript).read_bytes()
             if any(n in data for n in needles):
-                return
+                return True
         except OSError:
             pass
         time.sleep(0.05)
+    return False
+
+
+def settle(transcript, timeout):
+    """Wait until the transcript stops growing for a moment (at most `timeout`). In
+    interactive sessions the text before a tool call is already written at PreToolUse,
+    but the tool_use line itself only lands after the tool finishes — so never wait for it."""
+    deadline, last, still = time.time() + timeout, -1, 0.0
+    while time.time() < deadline:
+        try:
+            size = Path(transcript).stat().st_size
+        except OSError:
+            return
+        if size == last:
+            still += 0.1
+            if still >= 0.3:
+                return
+        else:
+            last, still = size, 0.0
+        time.sleep(0.1)
 
 
 def find_transcript(session_id):
@@ -195,7 +223,53 @@ def answer_block(qs, answers):
     return quote(lines)
 
 
-def render(entries, pending=None, quiet=False):
+IDK_WORDS = ("idk", "i don't know", "i dont know", "don't know", "dont know", "not sure", "no idea")
+
+
+IDK_SUFFIX_RE = re.compile(r"\(\s*pick\s+\W*other\W*.*?\)", re.IGNORECASE | re.DOTALL)
+
+
+def norm_q(text):
+    """Question identity for answer keys: ignore the idk hint, markdown emphasis,
+    punctuation and spacing, so small rewordings of the same question still match."""
+    t = IDK_SUFFIX_RE.sub(" ", text or "")
+    t = re.sub(r"[*_`]", "", t).lower()
+    t = re.sub(r"[^\w\s]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()[:300]
+
+
+def find_key(keys, question):
+    """Exact normalized match, else the key whose text starts the question (or vice versa)."""
+    n = norm_q(question)
+    if n in keys:
+        return keys[n]
+    for k, v in keys.items():
+        short, long_ = sorted((k, n), key=len)
+        if len(short) >= 25 and long_.startswith(short):
+            return v
+    return None
+
+
+def verdict_block(q, key, chosen):
+    """The grading the original quiz tool showed after every answer: verdict, correct
+    answer, explanation — computed here from the key, so it never depends on the model."""
+    correct = key.get("correct")
+    correct = [correct] if isinstance(correct, str) else list(correct or [])
+    ans = ", ".join(correct)
+    expl = (key.get("explanation") or "").strip()
+    labels = [o.get("label", "") for o in q.get("options") or []]
+    raw = (chosen or "").strip()
+    if not raw or raw.lower() in IDK_WORDS or raw.lower().startswith("idk"):
+        head = '> **Not known yet** — answer: {ans}'.format(ans=ans)
+    elif raw in labels or (q.get("multiSelect") and any(l and l in raw for l in labels)):
+        picked = {raw} if raw in labels else {l for l in labels if l and l in raw}
+        head = '> **✓ Correct**' if picked == set(correct) else '> **✗ Incorrect** — answer: {ans}'.format(ans=ans)
+    else:  # free text via "Other": show the key, the teacher grades it in prose
+        head = '> **Answer:** {ans}'.format(ans=ans)
+    return head + ("\n" + quote(expl.split("\n")) if expl else "")
+
+
+def render(entries, pending=None, quiet=False, denied=(), keys=None, prelogged=()):
     """Transcript entries -> (markdown blocks, pending asks, quiet).
 
     `pending` maps AskUserQuestion tool_use_id -> questions whose answer hasn't
@@ -248,7 +322,12 @@ def render(entries, pending=None, quiet=False):
                     state["quiet"] = False  # the learner answered: this is a real lesson turn now
                     tur = d.get("toolUseResult")
                     answers = tur.get("answers") if isinstance(tur, dict) else None
-                    add("answer", answer_block(qs, answers if isinstance(answers, dict) else {}))
+                    answers = answers if isinstance(answers, dict) else {}
+                    add("answer", answer_block(qs, answers))
+                    for q in qs:
+                        key = find_key(keys or {}, q.get("question"))
+                        if key and not key.get("ungraded"):
+                            add("verdict", verdict_block(q, key, answers.get(q.get("question"))))
         elif kind == "assistant":
             if msg.get("model") == "<synthetic>":
                 return  # Claude Code placeholders: "No response requested.", API errors
@@ -259,7 +338,11 @@ def render(entries, pending=None, quiet=False):
                 if c.get("type") == "text" and c.get("text", "").strip() \
                         and (not state["quiet"] or "![" in c["text"]):
                     add("assistant", c["text"].strip())
-                elif c.get("type") == "tool_use" and c.get("name") == "AskUserQuestion":
+                elif c.get("type") == "tool_use" and c.get("name") == "AskUserQuestion" \
+                        and c.get("id") in prelogged:
+                    pending.setdefault(c.get("id"), (c.get("input") or {}).get("questions") or [])
+                elif c.get("type") == "tool_use" and c.get("name") == "AskUserQuestion" \
+                        and c.get("id") not in denied:
                     qs = (c.get("input") or {}).get("questions") or []
                     add("question", "\n\n".join(question_block(q) for q in qs))
                     pending[c.get("id")] = qs
@@ -283,6 +366,109 @@ def append(file, blocks):
     sep = "" if not existing.strip() else ("\n" if existing.endswith("\n") else "\n\n")
     with open(p, "a", encoding="utf-8") as f:
         f.write(sep + "\n\n".join(blocks) + "\n")
+
+
+def shadow_of(path):
+    return SHADOW_DIR / (hashlib.sha1(str(Path(path)).encode()).hexdigest() + ".md")
+
+
+def safe_append(path, blocks):
+    """Append blocks, but first repair the note if it shrank since md-log last wrote it
+    (an editor or tool truncated/overwrote it): the damaged version is saved under
+    RECOVERED_DIR and the full content restored. A note that grew (the learner's own
+    additions) is kept as is."""
+    p = Path(path)
+    shadow = shadow_of(p)
+    existing = p.read_text(encoding="utf-8") if p.exists() else ""
+    known = shadow.read_text(encoding="utf-8") if shadow.exists() else None
+    restored = known is not None and len(existing) < len(known)
+    if restored:
+        RECOVERED_DIR.mkdir(parents=True, exist_ok=True)
+        (RECOVERED_DIR / f"{p.stem}.{time.strftime('%Y%m%d-%H%M%S')}.md").write_text(existing, encoding="utf-8")
+        with open(ERRORS, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + f"restored {p} ({len(existing)} < {len(known)} chars)\n")
+        existing = known
+    if not blocks and not restored:
+        return
+    new = existing
+    if blocks:
+        sep = "" if not existing.strip() else ("\n" if existing.endswith("\n") else "\n\n")
+        new = existing + sep + "\n\n".join(blocks) + "\n"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if restored:
+        with open(p, "w", encoding="utf-8") as f:  # in place: keep the same file for editors
+            f.write(new)
+    else:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(new[len(existing):])
+    SHADOW_DIR.mkdir(parents=True, exist_ok=True)
+    shadow.write_text(new, encoding="utf-8")
+
+
+def key_guard(data):
+    """Like the original quiz tool, a question can't be asked without its answer key."""
+    keys = load_json(KEYS).get(data.get("session_id"), {})
+    qs = (data.get("tool_input") or {}).get("questions") or []
+    missing = [q.get("header") or q.get("question", "")[:40] for q in qs if find_key(keys, q.get("question")) is None]
+    if not missing:
+        return None
+    return ("Quiz guard: register the answer key before asking (it stays hidden until the learner answers, "
+            "then md-log writes the grading into the note). For each question run:\n"
+            f'python3 "{os.path.abspath(__file__)}" key <<\'KEY\'\n'
+            '{"question": "<the exact question text>", "correct": "<the correct option label, or a list for multi-select>", '
+            '"explanation": "<why it is right, and what the likely wrong picks believe>"}\n'
+            "KEY\n"
+            'For a question with no right answer (goals, preferences) use {"question": "...", "ungraded": true}. '
+            "Missing: " + ", ".join(missing) + ". Then ask again.")
+
+
+def guard(data, link):
+    """No quiz without written teaching: deny an AskUserQuestion when the learner has
+    seen no real text since their last answer (or their last message). Fails open."""
+    transcript = data.get("transcript_path") or link.get("transcript")
+    if not transcript or not Path(transcript).exists():
+        return None
+    settle(transcript, GUARD_WAIT_S)
+    entries, _ = read_new(transcript, 0)
+    k = len(entries) - 1
+    chars, after_answer = 0, None
+    for d in reversed(entries[:k + 1]):
+        if not isinstance(d, dict) or d.get("isSidechain"):
+            continue
+        msg = d.get("message") if isinstance(d.get("message"), dict) else {}
+        content = msg.get("content")
+        if d.get("type") == "assistant" and msg.get("model") != "<synthetic>":
+            chars += sum(len(c.get("text", "").strip()) for c in content or []
+                         if isinstance(c, dict) and c.get("type") == "text")
+        elif d.get("type") == "user":
+            tur = d.get("toolUseResult")
+            if isinstance(tur, dict) and isinstance(tur.get("answers"), dict):
+                after_answer = True
+                break
+            texts = [content] if isinstance(content, str) else [
+                c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text"]
+            if any(classify_user(t, d.get("isMeta"))[1] == "human" for t in texts):
+                after_answer = False
+                break
+    if after_answer is None:
+        return None
+    # Probe and ungraded questions need only a short setup; checks and discovery prompts
+    # need real teaching since the learner's last answer or message.
+    keys = load_json(KEYS).get(data.get("session_id"), {})
+    qs = (data.get("tool_input") or {}).get("questions") or []
+    light = qs and all((find_key(keys, q.get("question")) or {}).get("kind") == "probe"
+                       or (find_key(keys, q.get("question")) or {}).get("ungraded") for q in qs)
+    need = GUARD_MIN_AFTER_PROMPT if light else GUARD_MIN_AFTER_ANSWER
+    if chars >= need:
+        return None
+    order = ("Write that text first, then register the key, then ask — text written after the key "
+             "command isn't seen in time.")
+    reason = ("Teaching guard: the learner has just answered and hasn't seen a written reply yet. "
+              "Don't ask another question now. First respond to their answer and teach what the next "
+              "question will check, as visible text. " + order) if after_answer else (
+              "Teaching guard: this question needs real teaching before it — explain the idea it checks, "
+              "as visible text (for a warm-up probe, register its key with \"kind\": \"probe\"). " + order)
+    return reason
 
 
 # --- commands --------------------------------------------------------------
@@ -371,12 +557,12 @@ def cmd_link(arg, from_now=False):
             fresh = False
             if sid not in backfilled.get(str(path), []):
                 backfilled.setdefault(str(path), []).append(sid)
-        blocks, pending, _ = render(entries) if fresh else ([], {}, True)
+        blocks, pending, _ = render(entries, keys=load_json(KEYS).get(sid, {})) if fresh else ([], {}, True)
         backfilled.setdefault(str(path), [])
         if fresh:
             backfilled[str(path)].append(sid)
         save_json(BACKFILLED, backfilled)
-        append(path, blocks)
+        safe_append(path, blocks)
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()
@@ -471,6 +657,73 @@ def cmd_topics(subject, names):
     return 0
 
 
+def cmd_key():
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    try:
+        body = json.loads(sys.stdin.read() or "{}")
+    except ValueError as e:
+        print(f"md-log error: the key must be JSON ({e})")
+        return 0
+    q = body.get("question")
+    if not q or not (body.get("ungraded") or (body.get("correct") and body.get("explanation"))):
+        print('md-log error: a key needs "question" plus "correct" and "explanation" (or "ungraded": true)')
+        return 0
+    with locked():
+        keys = load_json(KEYS)
+        keys.setdefault(sid, {})[norm_q(q)] = {k: body.get(k) for k in ("correct", "explanation", "ungraded", "kind")
+                                               if k in body}
+        save_json(KEYS, keys)
+    print("md-log: key registered (hidden from the learner until they answer)")
+    return 0
+
+
+def reset_plan_status(note):
+    """In the subject's plan table, set the row linking to this note back to Not started."""
+    plan = plan_of(note.parent)
+    if not plan.exists():
+        return False
+    lines = plan.read_text(encoding="utf-8").split("\n")
+    changed = False
+    for i, line in enumerate(lines):
+        if line.startswith("|") and f"(<{note.name}>)" in line:
+            cells = line.rstrip().rstrip("|").split("|")
+            cells[-1] = " Not started "
+            lines[i] = "|".join(cells) + "|"
+            changed = True
+    if changed:
+        plan.write_text("\n".join(lines), encoding="utf-8")
+    return changed
+
+
+def cmd_reset(arg):
+    """Start a note over: keep the old content aside, empty the note, forget md-log's copy,
+    and unlink every session logging to it (so nothing old is written back)."""
+    path = resolve_path(arg)
+    if path is None:
+        print("md-log usage: md-log.py reset <topic or file.md>")
+        return 0
+    with locked():
+        if path.exists() and path.read_text(encoding="utf-8").strip():
+            RECOVERED_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, RECOVERED_DIR / f"{path.stem}.before-reset.{time.strftime('%Y%m%d-%H%M%S')}.md")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8"):
+            pass
+        shadow_of(path).unlink(missing_ok=True)
+        backfilled = load_json(BACKFILLED)
+        backfilled.pop(str(path), None)
+        save_json(BACKFILLED, backfilled)
+        links = load_links()
+        dropped = [sid for sid, l in links.items() if l.get("file") == str(path)]
+        for sid in dropped:
+            links.pop(sid)
+        save_links(links)
+    status = reset_plan_status(path)
+    print(f"md-log: reset {path} (old content saved in {RECOVERED_DIR}; {len(dropped)} session(s) unlinked"
+          + (f"; plan status → Not started" if status else "") + ")")
+    return 0
+
+
 def cmd_vizdir():
     link = load_links().get(os.environ.get("CLAUDE_CODE_SESSION_ID", ""))
     print(Path(link["file"]).parent / "viz" if link else Path.cwd() / "viz")
@@ -504,7 +757,10 @@ def sync_log(data):
     if not link or not transcript or not Path(transcript).exists():
         return
     event = data.get("hook_event_name")
-    if event == "PreToolUse" and data.get("tool_use_id"):
+    live_ask = event == "PreToolUse" and data.get("tool_name") == "AskUserQuestion" and data.get("tool_use_id")
+    if live_ask:
+        settle(transcript, GUARD_WAIT_S)  # the text before the quiz is written by now
+    elif event == "PreToolUse" and data.get("tool_use_id"):
         wait_for_flush(transcript, [data["tool_use_id"]], FLUSH_WAIT_S["PreToolUse"])
     elif event == "Stop" and data.get("last_assistant_message"):
         wait_for_flush(transcript, text_needles(data["last_assistant_message"]), FLUSH_WAIT_S["Stop"])
@@ -515,8 +771,19 @@ def sync_log(data):
             return
         link["transcript"] = transcript
         entries, n = read_new(transcript, link["offset"])
-        blocks, link["pending"], link["quiet"] = render(entries, link.get("pending"), link.get("quiet", False))
-        append(link["file"], blocks)
+        keys = load_json(KEYS).get(sid, {})
+        blocks, link["pending"], link["quiet"] = render(entries, link.get("pending"), link.get("quiet", False),
+                                                        set(link.get("denied", [])), keys,
+                                                        set(link.get("prelogged", [])))
+        tid = data.get("tool_use_id")
+        if live_ask and tid not in link["pending"] and tid not in link.get("denied", []):
+            # write the question now, from the hook's own input: the learner reads it before answering
+            qs = (data.get("tool_input") or {}).get("questions") or []
+            if qs:
+                blocks.append("\n\n".join(question_block(q) for q in qs))
+                link["pending"][tid] = qs
+                link.setdefault("prelogged", []).append(tid)
+        safe_append(link["file"], blocks)
         link["offset"] = n
         save_links(links)
 
@@ -538,8 +805,22 @@ def spawn_worker(data):
 def cmd_hook():
     try:
         data = json.loads(sys.stdin.read() or "{}")
-        if data.get("session_id") not in load_links():
+        links = load_links()
+        if data.get("session_id") not in links:
             return 0  # the common case: unlinked session, stay out of the way
+        if data.get("hook_event_name") == "PreToolUse" and data.get("tool_name") == "AskUserQuestion":
+            reason = key_guard(data) or guard(data, links[data["session_id"]])
+            if reason:
+                with locked():
+                    links = load_links()
+                    link = links.get(data["session_id"])
+                    if link is not None:
+                        link.setdefault("denied", []).append(data.get("tool_use_id"))
+                        save_links(links)
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                         "permissionDecision": "deny",
+                                                         "permissionDecisionReason": reason}}))
+                return 0
         if data.get("hook_event_name") in FLUSH_WAIT_S and not os.environ.get("MD_LOG_SYNC"):
             spawn_worker(data)
             return 0
@@ -576,6 +857,10 @@ def dispatch(argv):
         return cmd_unlink()
     if cmd == "vizdir":
         return cmd_vizdir()
+    if cmd == "key":
+        return cmd_key()
+    if cmd == "reset":
+        return cmd_reset(" ".join(args))
     if cmd == "hook":
         return cmd_hook()
     print(__doc__)
